@@ -36,13 +36,33 @@ impl Pair {
 
     /// true if all of the pair's conditions hold for the given document and range
     pub fn should_close(&self, doc: &Rope, range: &Range) -> bool {
-        let mut should_close = Self::next_is_not_alpha(doc, range);
+        let cursor = range.cursor(doc.slice(..));
+
+        // Count the number of `self.open` occurrences backwards from the cursor
+        // position.
+        let open_start_count = doc
+            .slice(..cursor)
+            .chars()
+            .into_iter()
+            .filter(|c| c == &self.open || c == &self.close)
+            .map(|c| if c == self.open { 1 } else { -1 })
+            .sum::<i32>();
 
         if self.same() {
-            should_close &= Self::prev_is_not_alpha(doc, range);
-        }
+            return open_start_count % 2 == 0;
+        } else {
+            // Count the number of `self.close` occurrences forwards from the cursor
+            // position.
+            let close_end_count = doc
+                .slice(cursor..)
+                .chars()
+                .into_iter()
+                .filter(|c| c == &self.open || c == &self.close)
+                .map(|c| if c == self.close { 1 } else { -1 })
+                .sum::<i32>();
 
-        should_close
+            return open_start_count >= close_end_count;
+        };
     }
 
     pub fn next_is_not_alpha(doc: &Rope, range: &Range) -> bool {
