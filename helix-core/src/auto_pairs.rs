@@ -48,21 +48,21 @@ impl Pair {
             .map(|c| if c == self.open { 1 } else { -1 })
             .sum::<i32>();
 
-        if self.same() {
-            return open_start_count % 2 == 0;
-        } else {
-            // Count the number of `self.close` occurrences forwards from the cursor
-            // position.
-            let close_end_count = doc
-                .slice(cursor..)
-                .chars()
-                .into_iter()
-                .filter(|c| c == &self.open || c == &self.close)
-                .map(|c| if c == self.close { 1 } else { -1 })
-                .sum::<i32>();
+        let close_end_count = doc
+            .slice(cursor..)
+            .chars()
+            .into_iter()
+            .filter(|c| c == &self.open || c == &self.close)
+            .map(|c| if c == self.close { 1 } else { -1 })
+            .sum::<i32>();
 
-            return open_start_count >= close_end_count;
-        };
+        if self.same() {
+            // Close the pair automatically if the existing pairs are "complete"
+            return open_start_count % 2 == 0 && close_end_count % 2 == 0;
+        }
+
+        // Close the pair if there are no dangling closing characters
+        return close_end_count <= open_start_count;
     }
 
     pub fn next_is_not_alpha(doc: &Rope, range: &Range) -> bool {
