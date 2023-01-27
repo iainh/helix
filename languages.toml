@@ -878,7 +878,7 @@ source = { git = "https://github.com/uyha/tree-sitter-cmake", rev = "6e51463ef30
 [[language]]
 name = "make"
 scope = "source.make"
-file-types = ["Makefile", "makefile", "mk", "justfile", ".justfile"]
+file-types = ["Makefile", "makefile", "mk", "Justfile", "justfile", ".justfile"]
 injection-regex = "(make|makefile|Makefile|mk|just)"
 roots = []
 comment-token = "#"
@@ -1981,7 +1981,7 @@ roots = []
 
 [[grammar]]
 name = "xml"
-source = { git = "https://github.com/RenjiSann/tree-sitter-xml", rev = "422528a43630db6dcc1e222d1c5ee3babd559473" }
+source = { git = "https://github.com/RenjiSann/tree-sitter-xml", rev = "48a7c2b6fb9d515577e115e6788937e837815651" }
 
 [[language]]
 name = "wit"
