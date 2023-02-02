@@ -49,6 +49,7 @@ use movement::Movement;
 use crate::{
     args,
     compositor::{self, Component, Compositor},
+    filter_picker_entry,
     job::Callback,
     keymap::ReverseKeymap,
     ui::{self, overlay::overlayed, FilePicker, Picker, Popup, Prompt, PromptEvent},
@@ -2013,6 +2014,11 @@ fn global_search(cx: &mut Context) {
 
                 let search_root = std::env::current_dir()
                     .expect("Global search error: Failed to get current dir");
+                let dedup_symlinks = file_picker_config.deduplicate_links;
+                let absolute_root = search_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| search_root.clone());
+
                 WalkBuilder::new(search_root)
                     .hidden(file_picker_config.hidden)
                     .parents(file_picker_config.parents)
@@ -2022,10 +2028,9 @@ fn global_search(cx: &mut Context) {
                     .git_global(file_picker_config.git_global)
                     .git_exclude(file_picker_config.git_exclude)
                     .max_depth(file_picker_config.max_depth)
-                    // We always want to ignore the .git directory, otherwise if
-                    // `ignore` is turned off above, we end up with a lot of noise
-                    // in our picker.
-                    .filter_entry(|entry| entry.file_name() != ".git")
+                    .filter_entry(move |entry| {
+                        filter_picker_entry(entry, &absolute_root, dedup_symlinks)
+                    })
                     .build_parallel()
                     .run(|| {
                         let mut searcher = searcher.clone();
@@ -4775,35 +4780,39 @@ fn select_textobject(cx: &mut Context, objtype: textobject::TextObject) {
 
 fn surround_add(cx: &mut Context) {
     cx.on_next_key(move |cx, event| {
-        let ch = match event.char() {
-            Some(ch) => ch,
+        let (view, doc) = current!(cx.editor);
+        // surround_len is the number of new characters being added.
+        let (open, close, surround_len) = match event.char() {
+            Some(ch) => {
+                let (o, c) = surround::get_pair(ch);
+                let mut open = Tendril::new();
+                open.push(o);
+                let mut close = Tendril::new();
+                close.push(c);
+                (open, close, 2)
+            }
+            None if event.code == KeyCode::Enter => (
+                doc.line_ending.as_str().into(),
+                doc.line_ending.as_str().into(),
+                2 * doc.line_ending.len_chars(),
+            ),
             None => return,
         };
-        let (view, doc) = current!(cx.editor);
-        let selection = doc.selection(view.id);
-        let (open, close) = surround::get_pair(ch);
-        // The number of chars in get_pair
-        let surround_len = 2;
 
+        let selection = doc.selection(view.id);
         let mut changes = Vec::with_capacity(selection.len() * 2);
         let mut ranges = SmallVec::with_capacity(selection.len());
         let mut offs = 0;
 
         for range in selection.iter() {
-            let mut o = Tendril::new();
-            o.push(open);
-            let mut c = Tendril::new();
-            c.push(close);
-            changes.push((range.from(), range.from(), Some(o)));
-            changes.push((range.to(), range.to(), Some(c)));
+            changes.push((range.from(), range.from(), Some(open.clone())));
+            changes.push((range.to(), range.to(), Some(close.clone())));
 
-            // Add 2 characters to the range to select them
             ranges.push(
                 Range::new(offs + range.from(), offs + range.to() + surround_len)
                     .with_direction(range.direction()),
             );
 
-            // Add 2 characters to the offset for the next ranges
             offs += surround_len;
         }
 
