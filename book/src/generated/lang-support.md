@@ -98,6 +98,7 @@
 | pem | ✓ |  |  |  |
 | perl | ✓ | ✓ | ✓ |  |
 | php | ✓ | ✓ | ✓ | `intelephense` |
+| po | ✓ | ✓ |  |  |
 | ponylang | ✓ | ✓ | ✓ |  |
 | prisma | ✓ |  |  | `prisma-language-server` |
 | prolog |  |  |  | `swipl` |
@@ -147,4 +148,5 @@
 | xit | ✓ |  |  |  |
 | xml | ✓ |  | ✓ |  |
 | yaml | ✓ |  | ✓ | `yaml-language-server` |
+| yuck | ✓ |  |  |  |
 | zig | ✓ | ✓ | ✓ | `zls` |
