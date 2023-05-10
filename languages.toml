@@ -654,7 +654,7 @@ source = { git = "https://github.com/gbprod/tree-sitter-twig", rev = "807b293fec
 name = "latex"
 scope = "source.tex"
 injection-regex = "tex"
-file-types = ["tex"]
+file-types = ["tex", "sty", "cls"]
 roots = []
 comment-token = "%"
 language-server = { command = "texlab" }
@@ -731,7 +731,7 @@ name = "java"
 scope = "source.java"
 injection-regex = "java"
 file-types = ["java"]
-roots = ["pom.xml", "build.gradle"]
+roots = ["pom.xml", "build.gradle", "build.gradle.kts"]
 language-server = { command = "jdtls" }
 indent = { tab-width = 4, unit = "    " }
 
@@ -1159,7 +1159,7 @@ source = { git = "https://github.com/UserNobody14/tree-sitter-dart", rev = "2d7f
 [[language]]
 name = "scala"
 scope = "source.scala"
-roots = ["build.sbt", "build.sc", "build.gradle", "pom.xml", ".scala-build"]
+roots = ["build.sbt", "build.sc", "build.gradle", "build.gradle.kts", "pom.xml", ".scala-build"]
 file-types = ["scala", "sbt", "sc"]
 comment-token = "//"
 indent = { tab-width = 2, unit = "  " }
@@ -2466,10 +2466,6 @@ file-types = [ "cabal" ]
 roots = ["cabal.project", "Setup.hs"]
 indent = { tab-width = 2, unit = "  " }
 comment-token = "--"
-
-[[grammar]]
-name = "cabal"
-source = { git = "https://gitlab.com/magus/tree-sitter-cabal", rev = "7d5fa6887ae05a0b06d046f1e754c197c8ad869b" }
 
 [[language]]
 name = "hurl"
