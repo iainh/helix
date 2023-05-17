@@ -160,7 +160,7 @@ indent = { tab-width = 2, unit = "  " }
 name = "json"
 scope = "source.json"
 injection-regex = "json"
-file-types = ["json", "jsonc", "arb", "ipynb"]
+file-types = ["json", "jsonc", "arb", "ipynb", "geojson"]
 roots = []
 language-server = { command = "vscode-json-language-server", args = ["--stdio"] }
 auto-format = true
@@ -1182,7 +1182,7 @@ language-server = { command = "docker-langserver", args = ["--stdio"] }
 
 [[grammar]]
 name = "dockerfile"
-source = { git = "https://github.com/camdencheek/tree-sitter-dockerfile", rev = "7af32bc04a66ab196f5b9f92ac471f29372ae2ce" }
+source = { git = "https://github.com/camdencheek/tree-sitter-dockerfile", rev = "8ee3a0f7587b2bd8c45c8cb7d28bd414604aec62" }
 
 [[language]]
 name = "git-commit"
@@ -2085,7 +2085,7 @@ source = { git = "https://github.com/Unoqwy/tree-sitter-kdl", rev = "e1cd292c6d1
 name = "xml"
 scope = "source.xml"
 injection-regex = "xml"
-file-types = ["xml", "mobileconfig", "plist", "xib", "storyboard", "svg", "xsd"]
+file-types = ["xml", "mobileconfig", "plist", "xib", "storyboard", "svg", "xsd", "gml"]
 indent = { tab-width = 2, unit = "  " }
 roots = []
 
