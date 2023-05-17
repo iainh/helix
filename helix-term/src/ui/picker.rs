@@ -872,7 +872,7 @@ impl<T: Item + 'static> Component for Picker<T> {
         let table = Table::new(options)
             .style(text_style)
             .highlight_style(selected)
-            .highlight_symbol(" > ")
+            .highlight_symbol(" ⯈ ")
             .column_spacing(1)
             .widths(&self.widths);
 
