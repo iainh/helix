@@ -114,6 +114,19 @@ pub struct SavePoint {
     /// The view this savepoint is associated with
     pub view: ViewId,
     revert: Mutex<Transaction>,
+    pub text: Rope,
+}
+
+impl SavePoint {
+    pub fn cursor(&self) -> usize {
+        // we always create transactions with selections
+        self.revert
+            .lock()
+            .selection()
+            .unwrap()
+            .primary()
+            .cursor(self.text.slice(..))
+    }
 }
 
 pub struct Document {
@@ -141,9 +154,9 @@ pub struct Document {
     /// The document's default line ending.
     pub line_ending: LineEnding,
 
-    syntax: Option<Syntax>,
+    pub syntax: Option<Syntax>,
     /// Corresponding language scope name. Usually `source.<lang>`.
-    pub(crate) language: Option<Arc<LanguageConfiguration>>,
+    pub language: Option<Arc<LanguageConfiguration>>,
 
     /// Pending changes since last history commit.
     changes: ChangeSet,
@@ -856,12 +869,20 @@ impl Document {
 
     /// Detect the programming language based on the file type.
     pub fn detect_language(&mut self, config_loader: Arc<syntax::Loader>) {
-        if let Some(path) = &self.path {
-            let language_config = config_loader
-                .language_config_for_file_name(path)
-                .or_else(|| config_loader.language_config_for_shebang(self.text()));
-            self.set_language(language_config, Some(config_loader));
-        }
+        self.set_language(
+            self.detect_language_config(&config_loader),
+            Some(config_loader),
+        );
+    }
+
+    /// Detect the programming language based on the file type.
+    pub fn detect_language_config(
+        &self,
+        config_loader: &syntax::Loader,
+    ) -> Option<Arc<helix_core::syntax::LanguageConfiguration>> {
+        config_loader
+            .language_config_for_file_name(self.path.as_ref()?)
+            .or_else(|| config_loader.language_config_for_shebang(self.text()))
     }
 
     /// Detect the indentation used in the file, or otherwise defaults to the language indentation
@@ -951,8 +972,7 @@ impl Document {
     ) {
         if let (Some(language_config), Some(loader)) = (language_config, loader) {
             if let Some(highlight_config) = language_config.highlight_config(&loader.scopes()) {
-                let syntax = Syntax::new(&self.text, highlight_config, loader);
-                self.syntax = Some(syntax);
+                self.syntax = Syntax::new(&self.text, highlight_config, loader);
             }
 
             self.language = Some(language_config);
@@ -1034,7 +1054,12 @@ impl Document {
     }
 
     /// Apply a [`Transaction`] to the [`Document`] to change its text.
-    fn apply_impl(&mut self, transaction: &Transaction, view_id: ViewId) -> bool {
+    fn apply_impl(
+        &mut self,
+        transaction: &Transaction,
+        view_id: ViewId,
+        emit_lsp_notification: bool,
+    ) -> bool {
         use helix_core::Assoc;
 
         let old_doc = self.text().clone();
@@ -1087,9 +1112,11 @@ impl Document {
             // update tree-sitter syntax tree
             if let Some(syntax) = &mut self.syntax {
                 // TODO: no unwrap
-                syntax
-                    .update(&old_doc, &self.text, transaction.changes())
-                    .unwrap();
+                let res = syntax.update(&old_doc, &self.text, transaction.changes());
+                if res.is_err() {
+                    log::error!("TS parser failed, disabeling TS for the current buffer: {res:?}");
+                    self.syntax = None;
+                }
             }
 
             let changes = transaction.changes();
@@ -1130,25 +1157,31 @@ impl Document {
                 apply_inlay_hint_changes(padding_after_inlay_hints);
             }
 
-            // emit lsp notification
-            if let Some(language_server) = self.language_server() {
-                let notify = language_server.text_document_did_change(
-                    self.versioned_identifier(),
-                    &old_doc,
-                    self.text(),
-                    changes,
-                );
+            if emit_lsp_notification {
+                // emit lsp notification
+                if let Some(language_server) = self.language_server() {
+                    let notify = language_server.text_document_did_change(
+                        self.versioned_identifier(),
+                        &old_doc,
+                        self.text(),
+                        changes,
+                    );
 
-                if let Some(notify) = notify {
-                    tokio::spawn(notify);
+                    if let Some(notify) = notify {
+                        tokio::spawn(notify);
+                    }
                 }
             }
         }
         success
     }
 
-    /// Apply a [`Transaction`] to the [`Document`] to change its text.
-    pub fn apply(&mut self, transaction: &Transaction, view_id: ViewId) -> bool {
+    fn apply_inner(
+        &mut self,
+        transaction: &Transaction,
+        view_id: ViewId,
+        emit_lsp_notification: bool,
+    ) -> bool {
         // store the state just before any changes are made. This allows us to undo to the
         // state just before a transaction was applied.
         if self.changes.is_empty() && !transaction.changes().is_empty() {
@@ -1158,7 +1191,7 @@ impl Document {
             });
         }
 
-        let success = self.apply_impl(transaction, view_id);
+        let success = self.apply_impl(transaction, view_id, emit_lsp_notification);
 
         if !transaction.changes().is_empty() {
             // Compose this transaction with the previous one
@@ -1168,12 +1201,23 @@ impl Document {
         }
         success
     }
+    /// Apply a [`Transaction`] to the [`Document`] to change its text.
+    pub fn apply(&mut self, transaction: &Transaction, view_id: ViewId) -> bool {
+        self.apply_inner(transaction, view_id, true)
+    }
+
+    /// Apply a [`Transaction`] to the [`Document`] to change its text
+    /// without notifying the language servers. This is useful for temporary transactions
+    /// that must not influence the server.
+    pub fn apply_temporary(&mut self, transaction: &Transaction, view_id: ViewId) -> bool {
+        self.apply_inner(transaction, view_id, false)
+    }
 
     fn undo_redo_impl(&mut self, view: &mut View, undo: bool) -> bool {
         let mut history = self.history.take();
         let txn = if undo { history.undo() } else { history.redo() };
         let success = if let Some(txn) = txn {
-            self.apply_impl(txn, view.id)
+            self.apply_impl(txn, view.id, true)
         } else {
             false
         };
@@ -1205,15 +1249,32 @@ impl Document {
     /// the state it had when this function was called.
     pub fn savepoint(&mut self, view: &View) -> Arc<SavePoint> {
         let revert = Transaction::new(self.text()).with_selection(self.selection(view.id).clone());
+        // check if there is already an existing (identical) savepoint around
+        if let Some(savepoint) = self
+            .savepoints
+            .iter()
+            .rev()
+            .find_map(|savepoint| savepoint.upgrade())
+        {
+            let transaction = savepoint.revert.lock();
+            if savepoint.view == view.id
+                && transaction.changes().is_empty()
+                && transaction.selection() == revert.selection()
+            {
+                drop(transaction);
+                return savepoint;
+            }
+        }
         let savepoint = Arc::new(SavePoint {
             view: view.id,
             revert: Mutex::new(revert),
+            text: self.text.clone(),
         });
         self.savepoints.push(Arc::downgrade(&savepoint));
         savepoint
     }
 
-    pub fn restore(&mut self, view: &mut View, savepoint: &SavePoint) {
+    pub fn restore(&mut self, view: &mut View, savepoint: &SavePoint, emit_lsp_notification: bool) {
         assert_eq!(
             savepoint.view, view.id,
             "Savepoint must not be used with a different view!"
@@ -1228,7 +1289,7 @@ impl Document {
 
         let savepoint_ref = self.savepoints.remove(savepoint_idx);
         let mut revert = savepoint.revert.lock();
-        self.apply(&revert, view.id);
+        self.apply_inner(&revert, view.id, emit_lsp_notification);
         *revert = Transaction::new(self.text()).with_selection(self.selection(view.id).clone());
         self.savepoints.push(savepoint_ref)
     }
@@ -1241,7 +1302,7 @@ impl Document {
         };
         let mut success = false;
         for txn in txns {
-            if self.apply_impl(&txn, view.id) {
+            if self.apply_impl(&txn, view.id, true) {
                 success = true;
             }
         }
