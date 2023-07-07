@@ -611,7 +611,9 @@ impl std::str::FromStr for GutterType {
             "spacer" => Ok(Self::Spacer),
             "line-numbers" => Ok(Self::LineNumbers),
             "diff" => Ok(Self::Diff),
-            _ => anyhow::bail!("Gutter type can only be `diagnostics` or `line-numbers`."),
+            _ => anyhow::bail!(
+                "Gutter type can only be `diagnostics`, `spacer`, `line-numbers` or `diff`."
+            ),
         }
     }
 }
@@ -1703,7 +1705,7 @@ impl Editor {
                 _ = self.redraw_handle.0.notified() => {
                     if  !self.needs_redraw{
                         self.needs_redraw = true;
-                        let timeout = Instant::now() + Duration::from_millis(96);
+                        let timeout = Instant::now() + Duration::from_millis(33);
                         if timeout < self.idle_timer.deadline(){
                             self.idle_timer.as_mut().reset(timeout)
                         }
