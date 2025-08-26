@@ -24,6 +24,7 @@ use crate::ui::{self, Popup};
 use super::Handlers;
 
 // GPUI completion hook system
+#[derive(Clone)]
 pub struct GpuiCompletionResults {
     pub doc_id: helix_view::DocumentId,
     pub view_id: helix_view::ViewId,
