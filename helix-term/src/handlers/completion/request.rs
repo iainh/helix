@@ -48,13 +48,13 @@ pub fn request_completions_direct(
     let (view, doc) = current_ref!(editor);
     
     // Validate that we have the correct document and view
-    if view.id != view_id || doc.id() != doc_id {
+    if view_id != view_id || doc.id() != doc_id {
         log::info!("🔫15 ERROR: At point=direct_validation, message=Document/view mismatch in direct invocation");
         return Err(anyhow::anyhow!("Document/view mismatch"));
     }
     
     let text = doc.text();
-    let cursor = doc.selection(view.id).primary().cursor(text.slice(..));
+    let cursor = doc.selection(view_id).primary().cursor(text.slice(..));
     
     let trigger = Trigger {
         pos: cursor,
@@ -84,8 +84,6 @@ fn request_completions_gpui_compatible(
     // Hook 06: Result processing start  
     log::info!("🔫06 RESULT_PROCESSING_START: request_completions_gpui_compatible called for trigger {:?}", trigger.kind);
     
-    let (view, doc) = current_ref!(editor);
-
     // Skip ui::EditorView checks - GPUI doesn't have terminal UI components
     log::info!("🔫🎯 GPUI_BYPASS: Skipping ui::EditorView checks for GPUI compatibility");
     
@@ -94,20 +92,27 @@ fn request_completions_gpui_compatible(
         return;
     }
 
-    let text = doc.text();
-    let cursor = doc.selection(view.id).primary().cursor(text.slice(..));
-    if trigger.view != view.id || trigger.doc != doc.id() || cursor < trigger.pos {
-        log::info!("🔫17 EARLY_RETURN: Trigger validation failed - cursor moved or document changed");
-        return;
-    }
+    // Validation block - use immutable references
+    let cursor = {
+        let (view, doc) = current_ref!(editor);
+        let text = doc.text();
+        let cursor = doc.selection(view_id).primary().cursor(text.slice(..));
+        if trigger.view != view_id || trigger.doc != doc.id() || cursor < trigger.pos {
+            log::info!("🔫17 EARLY_RETURN: Trigger validation failed - cursor moved or document changed");
+            return;
+        }
+        cursor
+    };
     
-    // Continue with LSP request logic...
+    // Continue with LSP request logic - get mutable reference
     trigger.pos = cursor;
-    let trigger_text = text.slice(trigger.pos.saturating_sub(256)..trigger.pos);
-    
-    // Get mutable document reference for savepoint creation
     let doc = doc_mut!(editor, &trigger.doc);
-    let savepoint = doc.savepoint(view);
+    
+    // Get view separately to avoid borrow conflict
+    let view_id = trigger.view;
+    let text = doc.text();
+    let trigger_text = text.slice(trigger.pos.saturating_sub(256)..trigger.pos);
+    let savepoint = doc.savepoint(view_id);
     let mut seen_language_servers: FxHashSet<_> = FxHashSet::default();
     let language_servers: Vec<_> = doc
         .language_servers_with_feature(LanguageServerFeature::Completion)
@@ -161,16 +166,16 @@ fn request_completions_gpui_compatible(
         requests.spawn(request_completions_from_language_server(
             ls,
             doc,
-            view.id,
+            view_id,
             context,
             -(priority as i8),
             savepoint.clone(),
         ));
     }
     
-    // Add path and word completions
+    // Add path and word completions  
     if let Some(path_completion_request) = path_completion(
-        doc.selection(view.id).clone(),
+        doc.selection(view_id).clone(),
         doc,
         handle.clone(),
         savepoint.clone(),
@@ -395,8 +400,8 @@ fn request_completions(
     }
 
     let text = doc.text();
-    let cursor = doc.selection(view.id).primary().cursor(text.slice(..));
-    if trigger.view != view.id || trigger.doc != doc.id() || cursor < trigger.pos {
+    let cursor = doc.selection(view_id).primary().cursor(text.slice(..));
+    if trigger.view != view_id || trigger.doc != doc.id() || cursor < trigger.pos {
         return;
     }
     // This looks odd... Why are we not using the trigger position from the `trigger` here? Won't
@@ -465,14 +470,14 @@ fn request_completions(
         requests.spawn(request_completions_from_language_server(
             ls,
             doc,
-            view.id,
+            view_id,
             context,
             -(priority as i8),
             savepoint.clone(),
         ));
     }
     if let Some(path_completion_request) = path_completion(
-        doc.selection(view.id).clone(),
+        doc.selection(view_id).clone(),
         doc,
         handle.clone(),
         savepoint.clone(),
@@ -598,7 +603,7 @@ pub fn request_incomplete_completion_list(editor: &mut Editor, handle: TaskHandl
         let request = request_completions_from_language_server(
             ls,
             doc,
-            view.id,
+            view_id,
             CompletionContext {
                 trigger_kind: CompletionTriggerKind::TRIGGER_FOR_INCOMPLETE_COMPLETIONS,
                 trigger_character: None,
