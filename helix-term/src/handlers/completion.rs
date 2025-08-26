@@ -56,7 +56,7 @@ async fn replace_completions(
     while let Some(mut response) = handle_response(&mut requests, is_incomplete).await {
         // Hook 05: LSP response received
         log::info!("🔫05 LSP_RESPONSE_RECEIVED: Got {} completion items from provider={:?}", 
-                   response.items.items.len(), response.provider);
+                   response.items.len(), response.provider);
         
         let handle = handle.clone();
         dispatch(move |editor, compositor| {
@@ -84,7 +84,7 @@ async fn replace_completions(
             }
 
             // Hook 14: UI update attempt
-            log::info!("🔫14 UI_UPDATE_ATTEMPT: Attempting to update UI with {} items", response.items.items.len());
+            log::info!("🔫14 UI_UPDATE_ATTEMPT: Attempting to update UI with {} items", response.items.len());
             
             completion.replace_provider_completions(&mut response, is_incomplete);
             if completion.is_empty() {
@@ -94,7 +94,7 @@ async fn replace_completions(
                 trigger_auto_completion(editor, false);
             } else {
                 // Hook 16: Success
-                log::info!("🔫16 SUCCESS: Completion UI successfully updated with {} items", response.items.items.len());
+                log::info!("🔫16 SUCCESS: Completion UI successfully updated with {} items", response.items.len());
                 
                 editor
                     .handlers
