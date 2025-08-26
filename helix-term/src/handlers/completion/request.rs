@@ -262,8 +262,11 @@ fn request_completions_gpui_compatible(
     // Debug: Check if handle is valid before spawning
     log::info!("🔫🎯 HANDLE_STATUS: Handle is_canceled={}, spawning async closure", handle.is_canceled());
     
-    // Spawn the async completion processing
-    let spawn_result = tokio::spawn(cancelable_future(request_completions, handle.clone()));
+    // GPUI Integration: Skip cancelable_future wrapper for GPUI-compatible completions
+    // The TaskController goes out of scope immediately, canceling the handle
+    // GPUI manages its own lifecycle, so we don't need Helix's cancellation logic
+    log::info!("🔫🎯 GPUI_SPAWN: Spawning async closure without cancelable_future wrapper");
+    tokio::spawn(request_completions);
     log::info!("🔫🎯 SPAWN_RESULT: Async task spawned successfully");
 }
 
