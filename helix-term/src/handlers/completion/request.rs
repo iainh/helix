@@ -105,6 +105,8 @@ fn request_completions_gpui_compatible(
     trigger.pos = cursor;
     let trigger_text = text.slice(trigger.pos.saturating_sub(256)..trigger.pos);
     
+    // Get mutable document reference for savepoint creation
+    let doc = doc_mut!(editor, &trigger.doc);
     let savepoint = doc.savepoint(view);
     let mut seen_language_servers: FxHashSet<_> = FxHashSet::default();
     let language_servers: Vec<_> = doc
