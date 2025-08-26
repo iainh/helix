@@ -107,10 +107,14 @@ fn request_completions_gpui_compatible(
     // Update trigger position and get document for LSP requests
     trigger.pos = cursor;
     let doc = doc_mut!(editor, &trigger.doc);
-    let (view, _) = current_ref!(editor);
+    
+    // Get view from editor.tree using view_id to avoid borrow conflict with doc_mut
+    let view = editor.tree.get(trigger.view);
+    let savepoint = doc.savepoint(view);
+    
+    // Create the trigger text slice
     let text = doc.text();
     let trigger_text = text.slice(trigger.pos.saturating_sub(256)..trigger.pos);
-    let savepoint = doc.savepoint(view);
     
     let mut seen_language_servers: FxHashSet<_> = FxHashSet::default();
     let language_servers: Vec<_> = doc
@@ -399,8 +403,8 @@ fn request_completions(
     }
 
     let text = doc.text();
-    let cursor = doc.selection(view_id).primary().cursor(text.slice(..));
-    if trigger.view != view_id || trigger.doc != doc.id() || cursor < trigger.pos {
+    let cursor = doc.selection(view.id).primary().cursor(text.slice(..));
+    if trigger.view != view.id || trigger.doc != doc.id() || cursor < trigger.pos {
         return;
     }
     // This looks odd... Why are we not using the trigger position from the `trigger` here? Won't
@@ -469,14 +473,14 @@ fn request_completions(
         requests.spawn(request_completions_from_language_server(
             ls,
             doc,
-            view_id,
+            view.id,
             context,
             -(priority as i8),
             savepoint.clone(),
         ));
     }
     if let Some(path_completion_request) = path_completion(
-        doc.selection(view_id).clone(),
+        doc.selection(view.id).clone(),
         doc,
         handle.clone(),
         savepoint.clone(),
@@ -602,7 +606,7 @@ pub fn request_incomplete_completion_list(editor: &mut Editor, handle: TaskHandl
         let request = request_completions_from_language_server(
             ls,
             doc,
-            view_id,
+            view.id,
             CompletionContext {
                 trigger_kind: CompletionTriggerKind::TRIGGER_FOR_INCOMPLETE_COMPLETIONS,
                 trigger_character: None,
