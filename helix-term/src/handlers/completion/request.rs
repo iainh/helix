@@ -259,8 +259,12 @@ fn request_completions_gpui_compatible(
         log::info!("🔫16 SUCCESS: Completion processing completed successfully with {} items", items.len());
     };
     
+    // Debug: Check if handle is valid before spawning
+    log::info!("🔫🎯 HANDLE_STATUS: Handle is_canceled={}, spawning async closure", handle.is_canceled());
+    
     // Spawn the async completion processing
-    tokio::spawn(cancelable_future(request_completions, handle));
+    let spawn_result = tokio::spawn(cancelable_future(request_completions, handle.clone()));
+    log::info!("🔫🎯 SPAWN_RESULT: Async task spawned successfully");
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
