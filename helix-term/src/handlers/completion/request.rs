@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use rustc_hash::FxHashSet;
+use std::collections::HashSet as FxHashSet;
 
 use arc_swap::ArcSwap;
 use futures_util::Future;
@@ -64,7 +64,7 @@ pub fn request_completions_direct(
     };
     
     // Get a dummy task handle for direct invocation
-    let task_controller = TaskController::new();
+    let mut task_controller = TaskController::new();
     let handle = task_controller.restart();
     
     // Call GPUI-compatible completion request that bypasses ui::EditorView dependencies
@@ -105,7 +105,7 @@ fn request_completions_gpui_compatible(
     trigger.pos = cursor;
     let trigger_text = text.slice(trigger.pos.saturating_sub(256)..trigger.pos);
     
-    let savepoint = Arc::new(doc.savepoint(view));
+    let savepoint = doc.savepoint(view);
     let mut seen_language_servers = FxHashSet::default();
     let language_servers: Vec<_> = doc
         .language_servers_with_feature(LanguageServerFeature::Completion)
