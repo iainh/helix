@@ -73,6 +73,16 @@ impl helix_event::AsyncHook for CompletionHandler {
         event: Self::Event,
         _old_timeout: Option<Instant>,
     ) -> Option<Instant> {
+        // Hook 02: Handler processing
+        let event_type = match &event {
+            CompletionEvent::AutoTrigger { .. } => "AutoTrigger",
+            CompletionEvent::ManualTrigger { .. } => "ManualTrigger", 
+            CompletionEvent::TriggerChar { .. } => "TriggerChar",
+            CompletionEvent::DeleteText { .. } => "DeleteText",
+            CompletionEvent::Cancel => "Cancel",
+        };
+        log::info!("🔫02 HANDLER_PROCESSING: Completion handler processing event={}", event_type);
+        
         if self.in_flight.is_some() && !self.task_controller.is_running() {
             self.in_flight = None;
         }
@@ -164,15 +174,25 @@ fn request_completions(
     editor: &mut Editor,
     compositor: &mut Compositor,
 ) {
+    // Hook 06: Result processing start  
+    log::info!("🔫06 RESULT_PROCESSING_START: request_completions called for trigger {:?}", trigger.kind);
+    
     let (view, doc) = current_ref!(editor);
 
-    if compositor
-        .find::<ui::EditorView>()
-        .unwrap()
-        .completion
-        .is_some()
-        || editor.mode != Mode::Insert
-    {
+    // Hook 12: Compositor search (first check)
+    log::info!("🔫12 COMPOSITOR_SEARCH: request_completions checking for ui::EditorView");
+    
+    // CRITICAL: This is another failure point - request_completions also fails on ui::EditorView
+    let ui_check = compositor.find::<ui::EditorView>();
+    if ui_check.is_none() {
+        log::info!("🔫15 ERROR: At point=request_completions_find, message=ui::EditorView not found in GPUI compositor");
+        return;
+    }
+    
+    let ui = ui_check.unwrap();
+    if ui.completion.is_some() || editor.mode != Mode::Insert {
+        log::info!("🔫17 EARLY_RETURN: Completion exists or not in insert mode - completion_exists={}, mode={:?}", 
+                   ui.completion.is_some(), editor.mode);
         return;
     }
 
@@ -200,7 +220,15 @@ fn request_completions(
         .filter(|ls| seen_language_servers.insert(ls.id()))
         .collect();
     let mut requests = JoinSet::new();
+    
+    // Hook 07: Pre-dispatch preparation
+    log::info!("🔫07 PRE_DISPATCH: Preparing LSP requests to {} language servers", language_servers.len());
+    
     for (priority, ls) in language_servers.iter().enumerate() {
+        // Hook 03: LSP request preparation
+        log::info!("🔫03 LSP_REQUEST_PREP: Preparing LSP completion request to server={}, doc={:?}", 
+                   ls.name(), doc.path());
+        
         let context = if trigger.kind == TriggerKind::Manual {
             lsp::CompletionContext {
                 trigger_kind: lsp::CompletionTriggerKind::INVOKED,
@@ -231,6 +259,11 @@ fn request_completions(
                 }
             }
         };
+        
+        // Hook 04: LSP request sent
+        log::info!("🔫04 LSP_REQUEST_SENT: Spawning completion request to server={}, trigger_kind={:?}", 
+                   ls.name(), context.trigger_kind);
+        
         requests.spawn(request_completions_from_language_server(
             ls,
             doc,
@@ -254,7 +287,16 @@ fn request_completions(
         requests.spawn_blocking(word_completion_request);
     }
 
-    let ui = compositor.find::<ui::EditorView>().unwrap();
+    // CRITICAL: Another failure point - ui::EditorView lookup
+    log::info!("🔫12 COMPOSITOR_SEARCH: request_completions final ui::EditorView lookup");
+    
+    let ui_final = compositor.find::<ui::EditorView>();
+    if ui_final.is_none() {
+        log::info!("🔫15 ERROR: At point=request_completions_final_find, message=ui::EditorView not found for InsertEvent");
+        return;
+    }
+    
+    let ui = ui_final.unwrap();
     ui.last_insert.1.push(InsertEvent::RequestCompletion);
     let handle_ = handle.clone();
     let request_completions = async move {

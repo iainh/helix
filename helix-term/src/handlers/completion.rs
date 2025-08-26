@@ -50,18 +50,42 @@ async fn replace_completions(
     mut requests: JoinSet<CompletionResponse>,
     is_incomplete: bool,
 ) {
+    // Hook 18: Async processing
+    log::info!("🔫18 ASYNC_PROCESSING: replace_completions async stage started");
+    
     while let Some(mut response) = handle_response(&mut requests, is_incomplete).await {
+        // Hook 05: LSP response received
+        log::info!("🔫05 LSP_RESPONSE_RECEIVED: Got {} completion items from provider={:?}", 
+                   response.items.items.len(), response.provider);
+        
         let handle = handle.clone();
         dispatch(move |editor, compositor| {
-            let editor_view = compositor.find::<ui::EditorView>().unwrap();
+            // Hook 19: Job system callback
+            log::info!("🔫19 JOB_SYSTEM: replace_completions dispatch callback");
+            
+            // CRITICAL: This is another failure point - ui::EditorView doesn't exist in GPUI
+            let editor_view_result = compositor.find::<ui::EditorView>();
+            
+            if editor_view_result.is_none() {
+                log::info!("🔫15 ERROR: At point=replace_completions_find, message=ui::EditorView not found in GPUI compositor");
+                return;
+            }
+            
+            let editor_view = editor_view_result.unwrap();
+            
             let Some(completion) = &mut editor_view.completion else {
+                log::info!("🔫17 EARLY_RETURN: No completion UI available");
                 return;
             };
+            
             if handle.is_canceled() {
-                log::info!("dropping outdated completion response");
+                log::info!("🔫17 EARLY_RETURN: Handle canceled - dropping outdated completion response");
                 return;
             }
 
+            // Hook 14: UI update attempt
+            log::info!("🔫14 UI_UPDATE_ATTEMPT: Attempting to update UI with {} items", response.items.items.len());
+            
             completion.replace_provider_completions(&mut response, is_incomplete);
             if completion.is_empty() {
                 editor_view.clear_completion(editor);
@@ -69,6 +93,9 @@ async fn replace_completions(
                 // this occurs if typing a trigger char)
                 trigger_auto_completion(editor, false);
             } else {
+                // Hook 16: Success
+                log::info!("🔫16 SUCCESS: Completion UI successfully updated with {} items", response.items.items.len());
+                
                 editor
                     .handlers
                     .completions
@@ -87,19 +114,46 @@ fn show_completion(
     context: HashMap<CompletionProvider, ResponseContext>,
     trigger: Trigger,
 ) {
+    // Hook 08: show_completion called
+    log::info!("🔫08 DISPATCH_CALLED: show_completion function called with {} items", items.len());
+    
     let (view, doc) = current_ref!(editor);
+    
+    // Hook 10: Mode check
+    log::info!("🔫10 MODE_CHECK: Editor mode={:?}, is_insert={}", editor.mode, editor.mode == Mode::Insert);
+    
     // check if the completion request is stale.
     //
     // Completions are completed asynchronously and therefore the user could
     //switch document/view or leave insert mode. In all of thoise cases the
     // completion should be discarded
     if editor.mode != Mode::Insert || view.id != trigger.view || doc.id() != trigger.doc {
+        // Hook 17: Early return
+        log::info!("🔫17 EARLY_RETURN: Stale completion request - mode={:?}, view_match={}, doc_match={}", 
+                   editor.mode, view.id == trigger.view, doc.id() == trigger.doc);
         return;
     }
 
     let size = compositor.size();
-    let ui = compositor.find::<ui::EditorView>().unwrap();
+    
+    // Hook 12: Compositor search
+    log::info!("🔫12 COMPOSITOR_SEARCH: Looking for ui::EditorView in compositor");
+    
+    // CRITICAL: This is where GPUI integration fails - ui::EditorView doesn't exist in GPUI
+    let ui_result = compositor.find::<ui::EditorView>();
+    
+    // Hook 13: EditorView result 
+    if ui_result.is_none() {
+        log::info!("🔫13 EDITORVIEW_RESULT: found=false, completion_exists=None");
+        log::info!("🔫15 ERROR: At point=compositor_find, message=ui::EditorView not found in GPUI compositor");
+        return;
+    }
+    
+    let ui = ui_result.unwrap();
+    log::info!("🔫13 EDITORVIEW_RESULT: found=true, completion_exists={}", ui.completion.is_some());
+    
     if ui.completion.is_some() {
+        log::info!("🔫17 EARLY_RETURN: Completion already exists");
         return;
     }
     word::retain_valid_completions(trigger, doc, view.id, &mut items);
