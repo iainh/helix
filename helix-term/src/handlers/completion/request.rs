@@ -210,6 +210,7 @@ fn request_completions_gpui_compatible(
 
         let mut items: Vec<_> = Vec::new();
         response.take_items(&mut items);
+        log::info!("🔫🎯 ITEMS_EXTRACTED: Extracted {} items from response", items.len());
         context.insert(response.provider, response.context);
 
         // Process additional responses
@@ -217,8 +218,11 @@ fn request_completions_gpui_compatible(
             log::info!("🔫05 LSP_RESPONSE_RECEIVED: Got {} completion items from provider={:?}", 
                        response.items.len(), response.provider);
             response.take_items(&mut items);
+            log::info!("🔫🎯 ITEMS_ADDED: Added items, total now {} items", items.len());
             context.insert(response.provider, response.context);
         }
+        
+        log::info!("🔫🎯 FINAL_ITEMS_COUNT: Final items count before hook dispatch: {}", items.len());
 
         if items.is_empty() {
             log::info!("🔫17 EARLY_RETURN: No completion items received from any provider");
