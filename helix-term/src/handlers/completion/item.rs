@@ -22,6 +22,13 @@ impl CompletionItems {
             CompletionItems::Other(items) => items.is_empty(),
         }
     }
+    
+    pub fn len(&self) -> usize {
+        match self {
+            CompletionItems::Lsp(items) => items.len(),
+            CompletionItems::Other(items) => items.len(),
+        }
+    }
 }
 
 impl CompletionResponse {
