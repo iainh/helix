@@ -23,7 +23,7 @@ use crate::ui::{self, Popup};
 use super::Handlers;
 
 pub use item::{CompletionItem, CompletionItems, CompletionResponse, LspCompletionItem};
-pub use request::CompletionHandler;
+pub use request::{CompletionHandler, TriggerKind, request_completions_direct};
 pub use resolve::ResolveHandler;
 
 mod item;

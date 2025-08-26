@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use rustc_hash::FxHashSet;
+
 use arc_swap::ArcSwap;
 use futures_util::Future;
 use helix_core::completion::CompletionProvider;
@@ -30,8 +32,202 @@ use crate::ui::editor::InsertEvent;
 
 use super::word;
 
+/// GPUI Integration: Direct completion request bypassing async event system
+/// This function provides a synchronous interface to trigger completions directly
+/// for integration with GPUI-based editors that don't use Helix's async event loop
+pub fn request_completions_direct(
+    editor: &mut Editor,
+    compositor: &mut Compositor,
+    doc_id: DocumentId,
+    view_id: ViewId,
+    trigger_kind: TriggerKind,
+) -> Result<(), anyhow::Error> {
+    // Hook for GPUI direct invocation
+    log::info!("🔫🎯 GPUI_DIRECT_INVOCATION: Bypassing async event system for trigger {:?}", trigger_kind);
+    
+    let (view, doc) = current_ref!(editor);
+    
+    // Validate that we have the correct document and view
+    if view.id != view_id || doc.id() != doc_id {
+        log::info!("🔫15 ERROR: At point=direct_validation, message=Document/view mismatch in direct invocation");
+        return Err(anyhow::anyhow!("Document/view mismatch"));
+    }
+    
+    let text = doc.text();
+    let cursor = doc.selection(view.id).primary().cursor(text.slice(..));
+    
+    let trigger = Trigger {
+        pos: cursor,
+        view: view_id,
+        doc: doc_id,
+        kind: trigger_kind,
+    };
+    
+    // Get a dummy task handle for direct invocation
+    let task_controller = TaskController::new();
+    let handle = task_controller.restart();
+    
+    // Call GPUI-compatible completion request that bypasses ui::EditorView dependencies
+    request_completions_gpui_compatible(trigger, handle, editor, compositor);
+    
+    Ok(())
+}
+
+/// GPUI-compatible version of request_completions that bypasses ui::EditorView dependencies
+/// This version handles completion requests without relying on terminal UI components
+fn request_completions_gpui_compatible(
+    mut trigger: Trigger,
+    handle: TaskHandle,
+    editor: &mut Editor,
+    compositor: &mut Compositor,
+) {
+    // Hook 06: Result processing start  
+    log::info!("🔫06 RESULT_PROCESSING_START: request_completions_gpui_compatible called for trigger {:?}", trigger.kind);
+    
+    let (view, doc) = current_ref!(editor);
+
+    // Skip ui::EditorView checks - GPUI doesn't have terminal UI components
+    log::info!("🔫🎯 GPUI_BYPASS: Skipping ui::EditorView checks for GPUI compatibility");
+    
+    if editor.mode != Mode::Insert {
+        log::info!("🔫17 EARLY_RETURN: Not in insert mode - mode={:?}", editor.mode);
+        return;
+    }
+
+    let text = doc.text();
+    let cursor = doc.selection(view.id).primary().cursor(text.slice(..));
+    if trigger.view != view.id || trigger.doc != doc.id() || cursor < trigger.pos {
+        log::info!("🔫17 EARLY_RETURN: Trigger validation failed - cursor moved or document changed");
+        return;
+    }
+    
+    // Continue with LSP request logic...
+    trigger.pos = cursor;
+    let trigger_text = text.slice(trigger.pos.saturating_sub(256)..trigger.pos);
+    
+    let savepoint = Arc::new(doc.savepoint(view));
+    let mut seen_language_servers = FxHashSet::default();
+    let language_servers: Vec<_> = doc
+        .language_servers_with_feature(LanguageServerFeature::Completion)
+        .filter(|ls| seen_language_servers.insert(ls.id()))
+        .collect();
+    let mut requests = JoinSet::new();
+    
+    // Hook 07: Pre-dispatch preparation
+    log::info!("🔫07 PRE_DISPATCH: Preparing LSP requests to {} language servers", language_servers.len());
+    
+    for (priority, ls) in language_servers.iter().enumerate() {
+        // Hook 03: LSP request preparation
+        log::info!("🔫03 LSP_REQUEST_PREP: Preparing LSP completion request to server={}, doc={:?}", 
+                   ls.name(), doc.path());
+        
+        let context = if trigger.kind == TriggerKind::Manual {
+            lsp::CompletionContext {
+                trigger_kind: lsp::CompletionTriggerKind::INVOKED,
+                trigger_character: None,
+            }
+        } else {
+            let trigger_char =
+                ls.capabilities()
+                    .completion_provider
+                    .as_ref()
+                    .and_then(|provider| {
+                        provider
+                            .trigger_characters
+                            .as_deref()?
+                            .iter()
+                            .find(|&trigger| trigger_text.ends_with(trigger))
+                    });
+
+            if trigger_char.is_some() {
+                lsp::CompletionContext {
+                    trigger_kind: lsp::CompletionTriggerKind::TRIGGER_CHARACTER,
+                    trigger_character: trigger_char.cloned(),
+                }
+            } else {
+                lsp::CompletionContext {
+                    trigger_kind: lsp::CompletionTriggerKind::INVOKED,
+                    trigger_character: None,
+                }
+            }
+        };
+        
+        // Hook 04: LSP request sent
+        log::info!("🔫04 LSP_REQUEST_SENT: Spawning completion request to server={}, trigger_kind={:?}", 
+                   ls.name(), context.trigger_kind);
+        
+        requests.spawn(request_completions_from_language_server(
+            ls,
+            doc,
+            view.id,
+            context,
+            -(priority as i8),
+            savepoint.clone(),
+        ));
+    }
+    
+    // Add path and word completions
+    if let Some(path_completion_request) = path_completion(
+        doc.selection(view.id).clone(),
+        doc,
+        handle.clone(),
+        savepoint.clone(),
+    ) {
+        requests.spawn_blocking(path_completion_request);
+    }
+    if let Some(word_completion_request) =
+        word::completion(editor, trigger, handle.clone(), savepoint)
+    {
+        requests.spawn_blocking(word_completion_request);
+    }
+
+    // GPUI Integration: Skip ui::EditorView InsertEvent handling - not needed for GPUI
+    log::info!("🔫🎯 GPUI_BYPASS: Skipping ui::EditorView InsertEvent for GPUI compatibility");
+    
+    let handle_ = handle.clone();
+    let request_completions = async move {
+        let mut context = HashMap::new();
+        let Some(mut response) = handle_response(&mut requests, false).await else {
+            log::info!("🔫17 EARLY_RETURN: No completion response received");
+            return;
+        };
+        
+        // Hook 05: LSP response received
+        log::info!("🔫05 LSP_RESPONSE_RECEIVED: Got {} completion items from provider={:?}", 
+                   response.items.len(), response.provider);
+
+        let mut items: Vec<_> = Vec::new();
+        response.take_items(&mut items);
+        context.insert(response.provider, response.context);
+
+        // Process additional responses
+        while let Some(mut response) = handle_response(&mut requests, false).await {
+            log::info!("🔫05 LSP_RESPONSE_RECEIVED: Got {} completion items from provider={:?}", 
+                       response.items.len(), response.provider);
+            response.take_items(&mut items);
+            context.insert(response.provider, response.context);
+        }
+
+        if items.is_empty() {
+            log::info!("🔫17 EARLY_RETURN: No completion items received from any provider");
+            return;
+        }
+
+        // GPUI Integration: Instead of calling show_completion with ui::EditorView,
+        // we'll dispatch the completion results back to GPUI
+        log::info!("🔫🎯 GPUI_COMPLETION_READY: {} items ready for GPUI integration", items.len());
+        
+        // This is where we'll integrate with GPUI completion UI
+        // For now, just log success - the actual GPUI integration will be implemented next
+        log::info!("🔫16 SUCCESS: Completion processing completed successfully with {} items", items.len());
+    };
+    
+    // Spawn the async completion processing
+    tokio::spawn(cancelable_future(request_completions, handle));
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(super) enum TriggerKind {
+pub enum TriggerKind {
     Auto,
     TriggerChar,
     Manual,
