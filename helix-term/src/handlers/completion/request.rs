@@ -195,6 +195,14 @@ fn request_completions_gpui_compatible(
     log::info!("🔫🎯 GPUI_BYPASS: Skipping ui::EditorView InsertEvent for GPUI compatibility");
     log::info!("🔫🎯 JOINSET_STATUS: JoinSet has {} pending tasks before spawning async closure", requests.len());
     
+    // Extract text prefix before async closure (while we have access to editor)
+    let text_prefix = crate::handlers::completion::extract_completion_prefix(
+        editor, 
+        trigger.doc, 
+        trigger.view, 
+        trigger.pos
+    );
+    
     let handle_ = handle.clone();
     let request_completions = async move {
         log::info!("🔫🎯 ASYNC_START: Starting async completion processing with {} tasks in JoinSet", requests.len());
@@ -235,6 +243,7 @@ fn request_completions_gpui_compatible(
         
         // Convert completion items to a GPUI-friendly format
         // We'll send these results back via a completion hook that GPUI can register
+        
         let gpui_completion_results = crate::handlers::completion::GpuiCompletionResults {
             doc_id: trigger.doc,
             view_id: trigger.view,
@@ -242,6 +251,7 @@ fn request_completions_gpui_compatible(
             trigger_kind: trigger.kind,
             items: items.clone(),
             context,
+            text_prefix,
         };
         
         log::info!("🔫🎯 GPUI_HOOK_DISPATCH: Calling GPUI completion hook with {} items", 

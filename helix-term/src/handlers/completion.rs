@@ -32,6 +32,7 @@ pub struct GpuiCompletionResults {
     pub trigger_kind: request::TriggerKind,
     pub items: Vec<CompletionItem>,
     pub context: HashMap<CompletionProvider, ResponseContext>,
+    pub text_prefix: String,
 }
 
 static GPUI_COMPLETION_HOOK: Mutex<Option<Arc<dyn Fn(GpuiCompletionResults) + Send + Sync>>> = Mutex::new(None);
@@ -42,6 +43,40 @@ pub fn set_gpui_completion_hook(hook: impl Fn(GpuiCompletionResults) + Send + Sy
 
 pub fn get_gpui_completion_hook() -> Option<Arc<dyn Fn(GpuiCompletionResults) + Send + Sync>> {
     GPUI_COMPLETION_HOOK.lock().unwrap().clone()
+}
+
+/// Extract the text prefix being completed from the document at the cursor position
+pub fn extract_completion_prefix(editor: &Editor, doc_id: helix_view::DocumentId, view_id: helix_view::ViewId, pos: usize) -> String {
+    use helix_core::chars::char_is_word;
+    
+    // Get the document and view
+    let Some(doc) = editor.documents.get(&doc_id) else {
+        log::info!("🔫🎯 PREFIX_EXTRACT: Document not found, returning empty prefix");
+        return String::new();
+    };
+    
+    let text = doc.text().slice(..);
+    
+    // Find word boundary backwards from cursor position
+    let mut start_pos = pos;
+    let mut chars = text.chars_at(pos);
+    chars.reverse();
+    
+    // Move backwards while we're in a word
+    for ch in chars {
+        if char_is_word(ch) {
+            if start_pos > 0 {
+                start_pos -= ch.len_utf8();
+            }
+        } else {
+            break;
+        }
+    }
+    
+    // Extract the prefix text
+    let prefix = text.slice(start_pos..pos).to_string();
+    log::info!("🔫🎯 PREFIX_EXTRACT: Extracted prefix='{}' from pos {} (start={})", prefix, pos, start_pos);
+    prefix
 }
 
 pub use item::{CompletionItem, CompletionItems, CompletionResponse, LspCompletionItem};
@@ -209,6 +244,9 @@ fn show_completion(
 
     // Forward to GPUI completion system if hook is registered
     if let Some(hook) = get_gpui_completion_hook() {
+        // Extract the text prefix being completed
+        let text_prefix = extract_completion_prefix(editor, trigger.doc, trigger.view, trigger.pos);
+        
         let gpui_results = GpuiCompletionResults {
             doc_id: trigger.doc,
             view_id: trigger.view,
@@ -216,6 +254,7 @@ fn show_completion(
             trigger_kind: trigger.kind,
             items: items.clone(),
             context: context.clone(),
+            text_prefix,
         };
         hook(gpui_results);
     }
