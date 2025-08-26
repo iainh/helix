@@ -27,6 +27,7 @@ impl CompletionHandler {
     }
 }
 
+#[derive(Clone)]
 pub struct ResponseContext {
     /// Whether the completion response is marked as "incomplete."
     ///

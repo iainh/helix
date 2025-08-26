@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use helix_core::chars::char_is_word;
 use helix_core::completion::CompletionProvider;
@@ -22,9 +23,31 @@ use crate::ui::{self, Popup};
 
 use super::Handlers;
 
+// GPUI completion hook system
+pub struct GpuiCompletionResults {
+    pub doc_id: helix_view::DocumentId,
+    pub view_id: helix_view::ViewId,
+    pub trigger_pos: usize,
+    pub trigger_kind: request::TriggerKind,
+    pub items: Vec<CompletionItem>,
+    pub context: HashMap<CompletionProvider, ResponseContext>,
+}
+
+static GPUI_COMPLETION_HOOK: Mutex<Option<Arc<dyn Fn(GpuiCompletionResults) + Send + Sync>>> = Mutex::new(None);
+
+pub fn set_gpui_completion_hook(hook: impl Fn(GpuiCompletionResults) + Send + Sync + 'static) {
+    *GPUI_COMPLETION_HOOK.lock().unwrap() = Some(Arc::new(hook));
+}
+
+pub fn get_gpui_completion_hook() -> Option<Arc<dyn Fn(GpuiCompletionResults) + Send + Sync>> {
+    GPUI_COMPLETION_HOOK.lock().unwrap().clone()
+}
+
 pub use item::{CompletionItem, CompletionItems, CompletionResponse, LspCompletionItem};
 pub use request::{CompletionHandler, TriggerKind, request_completions_direct};
 pub use resolve::ResolveHandler;
+
+// The hook functions and types are already defined above and will be exported automatically
 
 mod item;
 mod path;
@@ -157,7 +180,20 @@ fn show_completion(
         return;
     }
     word::retain_valid_completions(trigger, doc, view.id, &mut items);
-    editor.handlers.completions.active_completions = context;
+    editor.handlers.completions.active_completions = context.clone();
+
+    // Forward to GPUI completion system if hook is registered
+    if let Some(hook) = get_gpui_completion_hook() {
+        let gpui_results = GpuiCompletionResults {
+            doc_id: trigger.doc,
+            view_id: trigger.view,
+            trigger_pos: trigger.pos,
+            trigger_kind: trigger.kind,
+            items: items.clone(),
+            context: context.clone(),
+        };
+        hook(gpui_results);
+    }
 
     let completion_area = ui.set_completion(editor, items, trigger.pos, size);
     let signature_help_area = compositor

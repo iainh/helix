@@ -224,11 +224,32 @@ fn request_completions_gpui_compatible(
         }
 
         // GPUI Integration: Instead of calling show_completion with ui::EditorView,
-        // we'll dispatch the completion results back to GPUI
+        // we'll dispatch the completion results back to GPUI via custom hook
         log::info!("🔫🎯 GPUI_COMPLETION_READY: {} items ready for GPUI integration", items.len());
         
-        // This is where we'll integrate with GPUI completion UI
-        // For now, just log success - the actual GPUI integration will be implemented next
+        // Convert completion items to a GPUI-friendly format
+        // We'll send these results back via a completion hook that GPUI can register
+        let gpui_completion_results = crate::handlers::completion::GpuiCompletionResults {
+            doc_id: trigger.doc,
+            view_id: trigger.view,
+            trigger_pos: trigger.pos,
+            trigger_kind: trigger.kind,
+            items: items.clone(),
+            context,
+        };
+        
+        log::info!("🔫🎯 GPUI_HOOK_DISPATCH: Calling GPUI completion hook with {} items", 
+                   gpui_completion_results.items.len());
+        
+        // Call the GPUI completion hook that Nucleotide can register
+        // This allows GPUI to receive the completion results without modifying Helix's event system
+        if let Some(hook) = crate::handlers::completion::get_gpui_completion_hook() {
+            hook(gpui_completion_results);
+            log::info!("🔫16 SUCCESS: GPUI completion hook called successfully");
+        } else {
+            log::info!("🔫16 NO_HOOK: No GPUI completion hook registered - results not forwarded");
+        }
+        
         log::info!("🔫16 SUCCESS: Completion processing completed successfully with {} items", items.len());
     };
     
