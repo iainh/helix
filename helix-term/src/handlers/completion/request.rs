@@ -106,7 +106,7 @@ fn request_completions_gpui_compatible(
     let trigger_text = text.slice(trigger.pos.saturating_sub(256)..trigger.pos);
     
     let savepoint = doc.savepoint(view);
-    let mut seen_language_servers = FxHashSet::default();
+    let mut seen_language_servers: FxHashSet<_> = FxHashSet::default();
     let language_servers: Vec<_> = doc
         .language_servers_with_feature(LanguageServerFeature::Completion)
         .filter(|ls| seen_language_servers.insert(ls.id()))
