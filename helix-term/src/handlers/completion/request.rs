@@ -193,9 +193,11 @@ fn request_completions_gpui_compatible(
 
     // GPUI Integration: Skip ui::EditorView InsertEvent handling - not needed for GPUI
     log::info!("🔫🎯 GPUI_BYPASS: Skipping ui::EditorView InsertEvent for GPUI compatibility");
+    log::info!("🔫🎯 JOINSET_STATUS: JoinSet has {} pending tasks before spawning async closure", requests.len());
     
     let handle_ = handle.clone();
     let request_completions = async move {
+        log::info!("🔫🎯 ASYNC_START: Starting async completion processing with {} tasks in JoinSet", requests.len());
         let mut context = HashMap::new();
         let Some(mut response) = handle_response(&mut requests, false).await else {
             log::info!("🔫17 EARLY_RETURN: No completion response received");
