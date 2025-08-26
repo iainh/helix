@@ -640,6 +640,12 @@ pub fn request_incomplete_completion_list(editor: &mut Editor, handle: TaskHandl
         requests.spawn(request);
     }
     if !requests.is_empty() {
-        tokio::spawn(replace_completions(handle, requests, true));
+        // GPUI Integration: Check if GPUI completion hook is registered
+        // If so, skip the regular completion flow to avoid race condition with GPUI-compatible processing
+        if crate::handlers::completion::get_gpui_completion_hook().is_some() {
+            log::info!("🔫🎯 REGULAR_FLOW_SKIPPED: Skipping regular completion flow - GPUI hook registered");
+        } else {
+            tokio::spawn(replace_completions(handle, requests, true));
+        }
     }
 }
