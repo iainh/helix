@@ -60,11 +60,35 @@ async fn handle_response(
     requests: &mut JoinSet<CompletionResponse>,
     is_incomplete: bool,
 ) -> Option<CompletionResponse> {
+    log::info!("🔫🔍 HANDLE_RESPONSE: Starting response handling, is_incomplete={}", is_incomplete);
+    
     loop {
-        let response = requests.join_next().await?.unwrap();
+        log::info!("🔫🔍 HANDLE_RESPONSE: Waiting for join_next()...");
+        
+        let join_result = requests.join_next().await;
+        let Some(result) = join_result else {
+            log::info!("🔫🔍 HANDLE_RESPONSE: join_next() returned None - no more tasks");
+            return None;
+        };
+        
+        let response = match result {
+            Ok(response) => {
+                log::info!("🔫🔍 HANDLE_RESPONSE: Got response with {} items", response.items.len());
+                response
+            }
+            Err(e) => {
+                log::info!("🔫🔍 HANDLE_RESPONSE: Task failed: {:?}", e);
+                continue;
+            }
+        };
+        
         if !is_incomplete && !response.context.is_incomplete && response.items.is_empty() {
+            log::info!("🔫🔍 HANDLE_RESPONSE: Skipping empty response (incomplete={}, items={})", 
+                      response.context.is_incomplete, response.items.len());
             continue;
         }
+        
+        log::info!("🔫🔍 HANDLE_RESPONSE: Returning response with {} items", response.items.len());
         return Some(response);
     }
 }
