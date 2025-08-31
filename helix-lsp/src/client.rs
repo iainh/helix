@@ -620,12 +620,34 @@ impl Client {
                             tag_support: Some(lsp::TagSupport {
                                 value_set: vec![lsp::CompletionItemTag::DEPRECATED],
                             }),
+                            // Help servers like rust-analyzer provide enriched labels
+                            label_details_support: Some(true),
+                            // Advertise supported insert text modes similar to Zed
+                            insert_text_mode_support: Some(lsp::InsertTextModeSupport {
+                                value_set: vec![
+                                    lsp::InsertTextMode::AS_IS,
+                                    lsp::InsertTextMode::ADJUST_INDENTATION,
+                                ],
+                            }),
                             ..Default::default()
                         }),
                         completion_item_kind: Some(lsp::CompletionItemKindCapability {
                             ..Default::default()
                         }),
-                        context_support: None, // additional context information Some(true)
+                        // Enable additional completion context information like trigger character
+                        context_support: Some(true),
+                        // Match Zed's default to adjust indentation on insert
+                        insert_text_mode: Some(lsp::InsertTextMode::ADJUST_INDENTATION),
+                        // Provide CompletionList item defaults the client understands
+                        completion_list: Some(lsp::CompletionListCapability {
+                            item_defaults: Some(vec![
+                                "commitCharacters".to_owned(),
+                                "editRange".to_owned(),
+                                "insertTextMode".to_owned(),
+                                "insertTextFormat".to_owned(),
+                                "data".to_owned(),
+                            ]),
+                        }),
                         ..Default::default()
                     }),
                     hover: Some(lsp::HoverClientCapabilities {
