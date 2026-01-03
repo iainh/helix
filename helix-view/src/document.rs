@@ -3,7 +3,7 @@ use arc_swap::access::DynAccess;
 use arc_swap::ArcSwap;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
-use helix_core::auto_pairs::AutoPairs;
+use helix_core::auto_pairs::{AutoPairs, BracketSet};
 use helix_core::chars::char_is_word;
 use helix_core::command_line::Token;
 use helix_core::diagnostic::DiagnosticProvider;
@@ -2196,6 +2196,39 @@ impl Document {
 
                 let lang_config = loader.language(syntax.layer(layer).language).config();
                 lang_config.auto_pairs.as_ref()
+            })
+            .or(global_config)
+    }
+
+    /// Get the document's bracket set for multi-character auto-pairs.
+    /// Similar to `auto_pairs()` but returns `BracketSet` which supports
+    /// multi-character triggers like ```, {% %}, <!-- -->, etc.
+    pub fn bracket_set<'a>(
+        &'a self,
+        editor: &'a Editor,
+        loader: &'a syntax::Loader,
+        view: &View,
+    ) -> Option<&'a BracketSet> {
+        let global_config = editor.bracket_set.as_ref();
+
+        // NOTE: If the user specifies the global auto pairs config as false, then
+        //       we want to disable it globally regardless of language settings
+        #[allow(clippy::question_mark)]
+        {
+            if global_config.is_none() {
+                return None;
+            }
+        }
+
+        self.syntax
+            .as_ref()
+            .and_then(|syntax| {
+                let selection = self.selection(view.id).primary();
+                let (start, end) = selection.into_byte_range(self.text().slice(..));
+                let layer = syntax.layer_for_byte_range(start as u32, end as u32);
+
+                let lang_config = loader.language(syntax.layer(layer).language).config();
+                lang_config.bracket_set.as_ref()
             })
             .or(global_config)
     }

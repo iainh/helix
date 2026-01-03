@@ -294,6 +294,12 @@ impl Loader {
             let language = Language(languages.len() as u32);
             config.language = Some(language);
 
+            // Populate auto_pairs and bracket_set from auto_pair_config
+            if let Some(ref apc) = config.auto_pair_config {
+                config.auto_pairs = apc.into();
+                config.bracket_set = apc.into();
+            }
+
             for file_type in &config.file_types {
                 match file_type {
                     FileType::Extension(extension) => {

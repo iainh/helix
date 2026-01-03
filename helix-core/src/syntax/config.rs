@@ -95,8 +95,23 @@ pub struct LanguageConfiguration {
     /// etc. Defaults to true. Optionally, this can be a list of 2-tuples
     /// to specify a list of characters to pair. This overrides the
     /// global setting.
-    #[serde(default, skip_serializing, deserialize_with = "deserialize_auto_pairs")]
+    ///
+    /// This also populates `bracket_set()` for multi-character auto-pairs.
+    #[serde(
+        default,
+        skip_serializing,
+        rename = "auto-pairs",
+        deserialize_with = "deserialize_auto_pair_config"
+    )]
+    pub auto_pair_config: Option<AutoPairConfig>,
+
+    /// Legacy auto_pairs accessor - computed from auto_pair_config
+    #[serde(skip)]
     pub auto_pairs: Option<AutoPairs>,
+
+    /// Multi-character auto-pairs - computed from auto_pair_config
+    #[serde(skip)]
+    pub bracket_set: Option<BracketSet>,
 
     pub rulers: Option<Vec<u16>>, // if set, override editor's rulers
 
@@ -746,6 +761,22 @@ where
     Ok(Option::<AutoPairConfig>::deserialize(deserializer)?.and_then(AutoPairConfig::into))
 }
 
+pub fn deserialize_auto_pair_config<'de, D>(
+    deserializer: D,
+) -> Result<Option<AutoPairConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<AutoPairConfig>::deserialize(deserializer)
+}
+
+pub fn deserialize_bracket_set<'de, D>(deserializer: D) -> Result<Option<BracketSet>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<AutoPairConfig>::deserialize(deserializer)?.and_then(AutoPairConfig::into))
+}
+
 fn default_timeout() -> u64 {
     20
 }
@@ -917,5 +948,46 @@ mod tests {
         };
         let pair: BracketPair = config.into();
         assert_eq!(pair.kind, BracketKind::Bracket);
+    }
+
+    #[test]
+    fn test_language_config_advanced_auto_pairs() {
+        let toml_str = r#"
+name = "test"
+scope = "source.test"
+file-types = ["test"]
+
+[[auto-pairs]]
+open = "{"
+close = "}"
+
+[[auto-pairs]]
+open = "{%"
+close = "%}"
+"#;
+
+        let config: LanguageConfiguration = toml::from_str(toml_str).unwrap();
+        
+        // auto_pair_config should be populated from the advanced config
+        assert!(
+            config.auto_pair_config.is_some(),
+            "auto_pair_config should be Some"
+        );
+        
+        // auto_pairs and bracket_set are populated by Loader::new, not during parsing
+        // So here they should be None
+        assert!(config.auto_pairs.is_none());
+        assert!(config.bracket_set.is_none());
+        
+        // Verify the AutoPairConfig is correct
+        if let Some(AutoPairConfig::Advanced(pairs)) = config.auto_pair_config {
+            assert_eq!(pairs.len(), 2);
+            assert_eq!(pairs[0].open, "{");
+            assert_eq!(pairs[0].close, "}");
+            assert_eq!(pairs[1].open, "{%");
+            assert_eq!(pairs[1].close, "%}");
+        } else {
+            panic!("Expected Advanced variant");
+        }
     }
 }

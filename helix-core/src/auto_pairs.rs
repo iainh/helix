@@ -318,6 +318,58 @@ pub fn detect_trigger_at<'a>(
         .max_by_key(|pair| pair.trigger.len())
 }
 
+/// Find if the prefix of a multi-char trigger was already auto-paired with a
+/// single-char close that needs to be replaced.
+///
+/// For example, if we have pairs `{` → `}` and `{%` → `%}`:
+/// - User types `{`, we insert `{}`
+/// - User types `%`, we detect `{%` trigger
+/// - This function finds that `}` at cursor should be replaced
+///
+/// Returns the character position of the close char to remove, if any.
+fn find_prefix_close_to_replace(
+    doc: &Rope,
+    cursor: usize,
+    typed_char: char,
+    matched_pair: &BracketPair,
+    set: &BracketSet,
+) -> Option<usize> {
+    // Only applies to multi-char triggers
+    if matched_pair.trigger.len() <= 1 {
+        return None;
+    }
+
+    // Get the prefix (trigger minus the typed char)
+    let prefix: String = matched_pair
+        .trigger
+        .chars()
+        .take(matched_pair.trigger.len() - typed_char.len_utf8())
+        .collect();
+
+    if prefix.is_empty() {
+        return None;
+    }
+
+    // Check if there's a single-char pair that matches the last char of the prefix
+    let prefix_last_char = prefix.chars().last()?;
+
+    // Look for a single-char pair whose open is the prefix_last_char
+    let prefix_pair = set
+        .pairs()
+        .iter()
+        .find(|p| p.trigger.len() == 1 && p.trigger.starts_with(prefix_last_char) && !p.same())?;
+
+    // Check if the close char of that pair is at the cursor position
+    let close_first_char = prefix_pair.close.chars().next()?;
+    let char_at_cursor = doc.get_char(cursor)?;
+
+    if char_at_cursor == close_first_char {
+        Some(cursor)
+    } else {
+        None
+    }
+}
+
 /// Detect if a close sequence matches at the cursor position.
 ///
 /// This looks forward from the cursor to see if the close sequence is present.
@@ -485,6 +537,10 @@ pub fn hook(doc: &Rope, selection: &Selection, ch: char, pairs: &AutoPairs) -> O
 ///
 /// This is the new entry point that supports multi-character pairs like ```,
 /// `{% %}`, `<!-- -->`, etc.
+///
+/// Returns `Some(Transaction)` when auto-pairing should occur. The transaction
+/// includes BOTH the typed character AND the closing sequence.
+/// Returns `None` when no auto-pair action is needed (caller should insert normally).
 #[must_use]
 pub fn hook_multi(
     doc: &Rope,
@@ -501,50 +557,60 @@ pub fn hook_multi(
     let transaction = Transaction::change_by_selection(doc, selection, |start_range| {
         let cursor = start_range.cursor(doc.slice(..));
 
-        // Try to detect a completed trigger (the char was just typed, so cursor is after it)
-        // For multi-char triggers, we need to look at what's before cursor + the new char
+        // Try to detect a completed trigger (the char is about to be typed at cursor)
         if let Some(pair) = detect_trigger_at(doc, cursor, ch, pairs) {
-            // Check if we should skip over existing close
             let next_char = doc.get_char(cursor);
-            if pair.same() && next_char == pair.close_first_char() {
-                // Skip over the close - no change, just move cursor
+
+            // For symmetric pairs (quotes), check if we should skip over existing close
+            if pair.same() && next_char == Some(ch) {
+                // Skip over the close - no change needed, just move cursor
                 let next_range = get_next_range(doc, start_range, offs, 0);
                 end_ranges.push(next_range);
                 made_changes = true;
                 return (cursor, cursor, None);
             }
 
-            // Check if we should insert close
+            // Check if we should insert the pair
             if pair.should_close(doc, start_range) {
-                // For multi-char pairs, we need to handle the trigger replacement
-                let trigger_len = pair.trigger.chars().count();
-                let open_len = pair.open.chars().count();
+                // Check if a prefix of this trigger was already auto-paired with a
+                // single-char close that we need to replace. For example, if the user
+                // types "{" and we inserted "{}", then they type "%" to complete "{%",
+                // we need to replace the "}" with "%}".
+                let prefix_close_to_remove =
+                    find_prefix_close_to_replace(doc, cursor, ch, pair, pairs);
 
-                if trigger_len == 1 && open_len == 1 {
-                    // Simple case: single char trigger, insert close after
-                    let close = Tendril::from(pair.close.as_str());
-                    let close_len = close.chars().count();
-                    let next_range = get_next_range(doc, start_range, offs, close_len);
-                    end_ranges.push(next_range);
-                    offs += close_len;
-                    made_changes = true;
-                    return (cursor, cursor, Some(close));
+                let mut pair_str = Tendril::new();
+                pair_str.push(ch);
+                pair_str.push_str(&pair.close);
+
+                let len_inserted = pair_str.chars().count();
+
+                // Calculate range changes accounting for removed close char
+                let (delete_start, delete_end) = if let Some(close_char_pos) = prefix_close_to_remove
+                {
+                    // Delete from cursor to after the old close char
+                    (cursor, close_char_pos + 1)
                 } else {
-                    // Multi-char: we've typed the last char of trigger, need to insert close
-                    // The trigger chars are already in the document (except last one being typed)
-                    let close = Tendril::from(pair.close.as_str());
-                    let close_len = close.chars().count();
-                    let next_range = get_next_range(doc, start_range, offs, close_len);
-                    end_ranges.push(next_range);
-                    offs += close_len;
-                    made_changes = true;
-                    return (cursor, cursor, Some(close));
-                }
-            } else {
-                // Don't auto-close, just let the char through
-                let next_range = get_next_range(doc, start_range, offs, 0);
+                    (cursor, cursor)
+                };
+
+                let chars_removed = delete_end - delete_start;
+                let net_inserted = len_inserted.saturating_sub(chars_removed);
+
+                let next_range = get_next_range(doc, start_range, offs, net_inserted);
                 end_ranges.push(next_range);
-                return (cursor, cursor, None);
+                offs = offs + len_inserted - chars_removed;
+                made_changes = true;
+                return (delete_start, delete_end, Some(pair_str));
+            } else {
+                // Conditions not met for auto-close, insert just the typed char
+                let mut t = Tendril::new();
+                t.push(ch);
+                let next_range = get_next_range(doc, start_range, offs, 1);
+                end_ranges.push(next_range);
+                offs += 1;
+                made_changes = true;
+                return (cursor, cursor, Some(t));
             }
         }
 
@@ -559,7 +625,7 @@ pub fn hook_multi(
             }
         }
 
-        // No auto-pair action, return no-op
+        // No auto-pair action, return no-op (caller will insert normally)
         let next_range = get_next_range(doc, start_range, offs, 0);
         end_ranges.push(next_range);
         (cursor, cursor, None)
@@ -939,10 +1005,7 @@ mod tests {
     #[test]
     fn test_hook_multi_single_char_insert() {
         // The hook is called BEFORE the character is inserted.
-        // It decides what to insert instead of just the typed char.
-        // For '(' with cursor at position 4, it should insert "()" 
-        // But the hook only adds the CLOSE part - the open is handled by the caller.
-        // Actually, looking at the original hook - it only inserts the close.
+        // It inserts BOTH the typed char AND the closing char.
         let doc = Rope::from("test\n");
         let selection = Selection::single(4, 5); // cursor at end of "test", before \n
         let set = BracketSet::from_default_pairs();
@@ -954,15 +1017,15 @@ mod tests {
         let mut new_doc = doc.clone();
         assert!(transaction.apply(&mut new_doc));
 
-        // hook_multi inserts the close char at cursor position
-        assert_eq!(new_doc.to_string(), "test)\n");
+        // hook_multi inserts "(" + ")" at cursor position
+        assert_eq!(new_doc.to_string(), "test()\n");
     }
 
     #[test]
     fn test_hook_multi_triple_backtick() {
         // When we type the third backtick, the document already has ``
         // and cursor is at position 6 (after the two backticks).
-        // The hook should detect ``` trigger and insert ```
+        // The hook should detect ``` trigger and insert ` + ```
         let doc = Rope::from("test``\n");
         let selection = Selection::single(6, 7); // cursor after `` (on the \n)
 
@@ -979,15 +1042,15 @@ mod tests {
         let mut new_doc = doc.clone();
         assert!(transaction.apply(&mut new_doc));
 
-        // The hook inserts the closing ``` at cursor position 6
-        // So: "test``" + "```" + "\n" = "test`````\n"
-        assert_eq!(new_doc.to_string(), "test`````\n");
+        // The hook inserts "`" + "```" at cursor position 6
+        // So: "test``" + "`" + "```" + "\n" = "test``````\n"
+        assert_eq!(new_doc.to_string(), "test``````\n");
     }
 
     #[test]
     fn test_hook_multi_jinja_delimiter() {
         // Document has "{" and we're typing "%"
-        // The trigger is "{%" so after typing %, we should get "%}"
+        // The trigger is "{%" so after typing %, we should get "%" + "%}"
         let doc = Rope::from("test{\n");
         let selection = Selection::single(5, 6); // cursor after { (on the \n)
 
@@ -1004,9 +1067,9 @@ mod tests {
         let mut new_doc = doc.clone();
         assert!(transaction.apply(&mut new_doc));
 
-        // The hook inserts the closing %} at cursor position 5
-        // So: "test{" + "%}" + "\n" = "test{%}\n"
-        assert_eq!(new_doc.to_string(), "test{%}\n");
+        // The hook inserts "%" + "%}" at cursor position 5
+        // So: "test{" + "%" + "%}" + "\n" = "test{%%}\n"
+        assert_eq!(new_doc.to_string(), "test{%%}\n");
     }
 
     #[test]
@@ -1030,22 +1093,22 @@ mod tests {
 
     #[test]
     fn test_hook_multi_symmetric_quote_not_after_alpha() {
-        // Quotes shouldn't auto-pair after alphanumeric
+        // Quotes shouldn't auto-pair after alphanumeric - just insert the quote
         let doc = Rope::from("test\n");
         let selection = Selection::single(4, 5); // cursor right after "test"
 
         let set = BracketSet::from_default_pairs();
 
-        // After an alphanumeric, quotes should NOT auto-pair
+        // After an alphanumeric, quotes should NOT auto-pair, just insert single quote
         let result = hook_multi(&doc, &selection, '"', &set);
-        // The hook returns None for symmetric pairs when prev is alphanumeric
-        assert!(result.is_none() || {
-            // Or it returns a no-op transaction
-            let transaction = result.unwrap();
-            let mut new_doc = doc.clone();
-            transaction.apply(&mut new_doc);
-            new_doc.slice(..) == "test\n"
-        });
+        assert!(result.is_some());
+
+        let transaction = result.unwrap();
+        let mut new_doc = doc.clone();
+        assert!(transaction.apply(&mut new_doc));
+
+        // Only the typed quote is inserted, not a pair
+        assert_eq!(new_doc.to_string(), "test\"\n");
     }
 
     #[test]
@@ -1063,8 +1126,8 @@ mod tests {
         let mut new_doc = doc.clone();
         assert!(transaction.apply(&mut new_doc));
 
-        // Should have inserted closing "
-        assert_eq!(new_doc.to_string(), "test \"\n");
+        // Should have inserted " + "
+        assert_eq!(new_doc.to_string(), "test \"\"\n");
     }
 
     #[test]
@@ -1095,5 +1158,39 @@ mod tests {
         let result = detect_trigger_at(&doc, 5, '%', &set);
         assert!(result.is_some());
         assert_eq!(result.unwrap().open, "{%");
+    }
+
+    #[test]
+    fn test_hook_multi_replaces_prefix_close() {
+        // Scenario: User has both { → } and {% → %} pairs configured.
+        // They type "{" which auto-pairs to "{|}" (cursor at |).
+        // Then they type "%" - we should replace "}" with "%}" to get "{%|%}"
+        let doc = Rope::from("test{}\n");
+        let selection = Selection::single(5, 6); // cursor between { and }
+
+        let pairs = vec![
+            BracketPair::new("{", "}"),
+            BracketPair::new("{%", "%}"),
+        ];
+        let set = BracketSet::new(pairs);
+
+        let result = hook_multi(&doc, &selection, '%', &set);
+        assert!(result.is_some());
+
+        let transaction = result.unwrap();
+        let mut new_doc = doc.clone();
+        assert!(transaction.apply(&mut new_doc));
+
+        // The } should be replaced with %%}
+        // Result: "test{" + "%" + "%}" + "\n" = "test{%%}\n"
+        // Wait, that's wrong. Let me reconsider.
+        // 
+        // Original: "test{}\n" with cursor at position 5 (between { and })
+        // We type "%"
+        // The transaction should:
+        // - Delete from cursor (5) to after "}" (6)
+        // - Insert "%%}" at position 5
+        // Result: "test{%%}\n"
+        assert_eq!(new_doc.to_string(), "test{%%}\n");
     }
 }

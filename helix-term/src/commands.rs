@@ -4177,11 +4177,11 @@ pub mod insert {
         let selection = doc.selection(view.id);
 
         let loader: &helix_core::syntax::Loader = &cx.editor.syn_loader.load();
-        let auto_pairs = doc.auto_pairs(cx.editor, loader, view);
 
-        let transaction = auto_pairs
-            .as_ref()
-            .and_then(|ap| auto_pairs::hook(text, selection, c, ap))
+        // Try multi-char auto-pairs first (supports ```, {% %}, etc.)
+        let bracket_set = doc.bracket_set(cx.editor, loader, view);
+        let transaction = bracket_set
+            .and_then(|bs| auto_pairs::hook_multi(text, selection, c, bs))
             .or_else(|| insert(text, selection, c));
 
         let (view, doc) = current!(cx.editor);
