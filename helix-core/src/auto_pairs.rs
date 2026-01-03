@@ -801,6 +801,51 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
     }
 }
 
+/// Hook for multi-character auto-pairs with automatic context detection from syntax tree.
+///
+/// This is the highest-level entry point for context-aware auto-pairing. It automatically
+/// computes the syntactic context (code, string, comment, regex) for each cursor position
+/// using the provided syntax tree and language data.
+///
+/// # Arguments
+/// * `doc` - The document text
+/// * `selection` - Current selection with one or more cursors
+/// * `ch` - The character being typed
+/// * `pairs` - The bracket set to use for auto-pairing
+/// * `syntax` - Optional syntax tree (if None, falls back to CODE context)
+/// * `lang_data` - Language data containing `bracket_context_at` method
+/// * `loader` - Syntax loader for language configuration
+///
+/// # Returns
+/// `Some(Transaction)` when auto-pairing should occur, `None` otherwise.
+#[must_use]
+pub fn hook_with_syntax(
+    doc: &Rope,
+    selection: &Selection,
+    ch: char,
+    pairs: &BracketSet,
+    syntax: Option<&crate::syntax::Syntax>,
+    lang_data: &crate::syntax::LanguageData,
+    loader: &crate::syntax::Loader,
+) -> Option<Transaction> {
+    log::trace!("autopairs hook_with_syntax selection: {:#?}", selection);
+
+    let contexts: Vec<BracketContext> = selection
+        .ranges()
+        .iter()
+        .map(|range| {
+            let cursor = range.cursor(doc.slice(..));
+            match syntax {
+                Some(syn) => lang_data.bracket_context_at(syn.tree(), doc.slice(..), cursor, loader),
+                None => BracketContext::Code,
+            }
+        })
+        .collect();
+
+    let state = AutoPairState::with_contexts(doc, selection, pairs, &contexts);
+    hook_with_context(&state, ch)
+}
+
 // ============================================================================
 // New Multi-Character Hook (Without Context)
 // ============================================================================

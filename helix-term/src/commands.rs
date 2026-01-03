@@ -4178,10 +4178,30 @@ pub mod insert {
 
         let loader: &helix_core::syntax::Loader = &cx.editor.syn_loader.load();
 
-        // Try multi-char auto-pairs first (supports ```, {% %}, etc.)
+        // Try context-aware multi-char auto-pairs (supports ```, {% %}, etc.)
+        // Uses tree-sitter to detect string/comment contexts and gate pairing
         let bracket_set = doc.bracket_set(cx.editor, loader, view);
         let transaction = bracket_set
-            .and_then(|bs| auto_pairs::hook_multi(text, selection, c, bs))
+            .and_then(|bs| {
+                let syntax = doc.syntax();
+                let lang_data = syntax
+                    .map(|syn| loader.language(syn.root_language()))
+                    .or_else(|| {
+                        doc.language_name()
+                            .and_then(|name| loader.language_for_name(name))
+                            .map(|lang| loader.language(lang))
+                    });
+
+                match lang_data {
+                    Some(ld) => {
+                        auto_pairs::hook_with_syntax(text, selection, c, bs, syntax, ld, loader)
+                    }
+                    None => {
+                        // Fallback: no language data, use non-context-aware hook
+                        auto_pairs::hook_multi(text, selection, c, bs)
+                    }
+                }
+            })
             .or_else(|| insert(text, selection, c));
 
         let (view, doc) = current!(cx.editor);
