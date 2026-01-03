@@ -1,4 +1,8 @@
-use crate::{auto_pairs::AutoPairs, diagnostic::Severity, Language};
+use crate::{
+    auto_pairs::{AutoPairs, BracketKind, BracketPair, BracketSet, ContextMask},
+    diagnostic::Severity,
+    Language,
+};
 
 use globset::GlobSet;
 use helix_stdx::rope;
@@ -514,8 +518,93 @@ pub enum AutoPairConfig {
     /// Enables or disables auto pairing. False means disabled. True means to use the default pairs.
     Enable(bool),
 
-    /// The mappings of pairs.
+    /// The mappings of pairs (legacy single-char format).
     Pairs(HashMap<char, char>),
+
+    /// Advanced multi-character pairs configuration.
+    Advanced(Vec<BracketPairConfig>),
+}
+
+/// Configuration for a single bracket pair in the advanced format.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct BracketPairConfig {
+    /// Opening string (required)
+    pub open: String,
+    /// Closing string (required)
+    pub close: String,
+    /// Custom trigger string (defaults to open)
+    #[serde(default)]
+    pub trigger: Option<String>,
+    /// Pair kind: "bracket", "quote", "delimiter", "tag", "custom"
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Contexts where auto-pairing is allowed: ["code", "string", "comment", "regex"]
+    #[serde(default)]
+    pub allowed_contexts: Option<Vec<String>>,
+    /// Whether this pair participates in surround commands
+    #[serde(default)]
+    pub surround: Option<bool>,
+}
+
+impl BracketPairConfig {
+    fn parse_kind(&self) -> BracketKind {
+        match self.kind.as_deref() {
+            Some("bracket") => BracketKind::Bracket,
+            Some("quote") => BracketKind::Quote,
+            Some("delimiter") => BracketKind::Delimiter,
+            Some("tag") => BracketKind::Tag,
+            Some("custom") => BracketKind::Custom,
+            _ => {
+                // Auto-detect based on open/close
+                if self.open == self.close {
+                    BracketKind::Quote
+                } else if self.open.len() > 1 || self.close.len() > 1 {
+                    BracketKind::Delimiter
+                } else {
+                    BracketKind::Bracket
+                }
+            }
+        }
+    }
+
+    fn parse_contexts(&self) -> ContextMask {
+        match &self.allowed_contexts {
+            Some(contexts) => {
+                let mut mask = ContextMask::empty();
+                for ctx in contexts {
+                    match ctx.as_str() {
+                        "code" => mask |= ContextMask::CODE,
+                        "string" => mask |= ContextMask::STRING,
+                        "comment" => mask |= ContextMask::COMMENT,
+                        "regex" => mask |= ContextMask::REGEX,
+                        "all" => mask |= ContextMask::ALL,
+                        _ => {}
+                    }
+                }
+                if mask.is_empty() {
+                    ContextMask::CODE
+                } else {
+                    mask
+                }
+            }
+            None => ContextMask::CODE,
+        }
+    }
+}
+
+impl From<BracketPairConfig> for BracketPair {
+    fn from(config: BracketPairConfig) -> Self {
+        let trigger = config.trigger.clone().unwrap_or_else(|| config.open.clone());
+        BracketPair {
+            trigger,
+            open: config.open.clone(),
+            close: config.close.clone(),
+            kind: config.parse_kind(),
+            allowed_contexts: config.parse_contexts(),
+            surround: config.surround.unwrap_or(true),
+        }
+    }
 }
 
 impl Default for AutoPairConfig {
@@ -530,11 +619,41 @@ impl From<&AutoPairConfig> for Option<AutoPairs> {
             AutoPairConfig::Enable(false) => None,
             AutoPairConfig::Enable(true) => Some(AutoPairs::default()),
             AutoPairConfig::Pairs(pairs) => Some(AutoPairs::new(pairs.iter())),
+            AutoPairConfig::Advanced(_) => {
+                // For legacy AutoPairs, convert advanced config to single-char pairs only
+                // Full multi-char support uses BracketSet instead
+                Some(AutoPairs::default())
+            }
+        }
+    }
+}
+
+impl From<&AutoPairConfig> for Option<BracketSet> {
+    fn from(auto_pair_config: &AutoPairConfig) -> Self {
+        match auto_pair_config {
+            AutoPairConfig::Enable(false) => None,
+            AutoPairConfig::Enable(true) => Some(BracketSet::from_default_pairs()),
+            AutoPairConfig::Pairs(pairs) => {
+                let bracket_pairs: Vec<BracketPair> =
+                    pairs.iter().map(|(&o, &c)| (o, c).into()).collect();
+                Some(BracketSet::new(bracket_pairs))
+            }
+            AutoPairConfig::Advanced(configs) => {
+                let bracket_pairs: Vec<BracketPair> =
+                    configs.iter().cloned().map(BracketPair::from).collect();
+                Some(BracketSet::new(bracket_pairs))
+            }
         }
     }
 }
 
 impl From<AutoPairConfig> for Option<AutoPairs> {
+    fn from(auto_pairs_config: AutoPairConfig) -> Self {
+        (&auto_pairs_config).into()
+    }
+}
+
+impl From<AutoPairConfig> for Option<BracketSet> {
     fn from(auto_pairs_config: AutoPairConfig) -> Self {
         (&auto_pairs_config).into()
     }
@@ -629,4 +748,174 @@ where
 
 fn default_timeout() -> u64 {
     20
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_auto_pair_config_bool() {
+        // Test via a wrapper struct since TOML needs a document structure
+        #[derive(Deserialize)]
+        struct Wrapper {
+            #[serde(rename = "auto-pairs")]
+            auto_pairs: AutoPairConfig,
+        }
+
+        let config: Wrapper = toml::from_str("auto-pairs = true").unwrap();
+        assert_eq!(config.auto_pairs, AutoPairConfig::Enable(true));
+
+        let config: Wrapper = toml::from_str("auto-pairs = false").unwrap();
+        assert_eq!(config.auto_pairs, AutoPairConfig::Enable(false));
+    }
+
+    #[test]
+    fn test_auto_pair_config_char_pairs() {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            #[serde(rename = "auto-pairs")]
+            auto_pairs: AutoPairConfig,
+        }
+
+        let toml_str = r#"
+            [auto-pairs]
+            '(' = ')'
+            '{' = '}'
+        "#;
+        let config: Wrapper = toml::from_str(toml_str).unwrap();
+        if let AutoPairConfig::Pairs(pairs) = config.auto_pairs {
+            assert_eq!(pairs.get(&'('), Some(&')'));
+            assert_eq!(pairs.get(&'{'), Some(&'}'));
+        } else {
+            panic!("Expected Pairs variant");
+        }
+    }
+
+    #[test]
+    fn test_bracket_pair_config_parsing() {
+        let toml_str = r#"
+            open = "("
+            close = ")"
+            kind = "bracket"
+        "#;
+        let config: BracketPairConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.open, "(");
+        assert_eq!(config.close, ")");
+        assert_eq!(config.kind, Some("bracket".to_string()));
+    }
+
+    #[test]
+    fn test_bracket_pair_config_vec_parsing() {
+        let toml_str = r#"
+            [[pair]]
+            open = "("
+            close = ")"
+            kind = "bracket"
+
+            [[pair]]
+            open = "```"
+            close = "```"
+            kind = "delimiter"
+        "#;
+        #[derive(Deserialize)]
+        struct Wrapper {
+            pair: Vec<BracketPairConfig>,
+        }
+        let wrapper: Wrapper = toml::from_str(toml_str).unwrap();
+        assert_eq!(wrapper.pair.len(), 2);
+        assert_eq!(wrapper.pair[0].open, "(");
+        assert_eq!(wrapper.pair[0].close, ")");
+        assert_eq!(wrapper.pair[1].open, "```");
+        assert_eq!(wrapper.pair[1].close, "```");
+    }
+
+    #[test]
+    fn test_bracket_pair_config_to_bracket_pair() {
+        let config = BracketPairConfig {
+            open: "{%".to_string(),
+            close: "%}".to_string(),
+            trigger: None,
+            kind: Some("delimiter".to_string()),
+            allowed_contexts: Some(vec!["code".to_string(), "string".to_string()]),
+            surround: Some(false),
+        };
+
+        let pair: BracketPair = config.into();
+        assert_eq!(pair.open, "{%");
+        assert_eq!(pair.close, "%}");
+        assert_eq!(pair.trigger, "{%");
+        assert_eq!(pair.kind, BracketKind::Delimiter);
+        assert!(pair.allowed_contexts.contains(ContextMask::CODE));
+        assert!(pair.allowed_contexts.contains(ContextMask::STRING));
+        assert!(!pair.allowed_contexts.contains(ContextMask::COMMENT));
+        assert!(!pair.surround);
+    }
+
+    #[test]
+    fn test_auto_pair_config_to_bracket_set() {
+        let config = AutoPairConfig::Advanced(vec![
+            BracketPairConfig {
+                open: "(".to_string(),
+                close: ")".to_string(),
+                trigger: None,
+                kind: None,
+                allowed_contexts: None,
+                surround: None,
+            },
+            BracketPairConfig {
+                open: "```".to_string(),
+                close: "```".to_string(),
+                trigger: None,
+                kind: None,
+                allowed_contexts: None,
+                surround: None,
+            },
+        ]);
+
+        let set: Option<BracketSet> = (&config).into();
+        assert!(set.is_some());
+        let set = set.unwrap();
+        assert_eq!(set.len(), 2);
+        assert_eq!(set.max_trigger_len(), 3);
+    }
+
+    #[test]
+    fn test_bracket_pair_config_auto_detect_kind() {
+        // Quote detection
+        let config = BracketPairConfig {
+            open: "\"".to_string(),
+            close: "\"".to_string(),
+            trigger: None,
+            kind: None,
+            allowed_contexts: None,
+            surround: None,
+        };
+        let pair: BracketPair = config.into();
+        assert_eq!(pair.kind, BracketKind::Quote);
+
+        // Delimiter detection (multi-char)
+        let config = BracketPairConfig {
+            open: "<!--".to_string(),
+            close: "-->".to_string(),
+            trigger: None,
+            kind: None,
+            allowed_contexts: None,
+            surround: None,
+        };
+        let pair: BracketPair = config.into();
+        assert_eq!(pair.kind, BracketKind::Delimiter);
+
+        // Bracket detection (single-char different)
+        let config = BracketPairConfig {
+            open: "[".to_string(),
+            close: "]".to_string(),
+            trigger: None,
+            kind: None,
+            allowed_contexts: None,
+            surround: None,
+        };
+        let pair: BracketPair = config.into();
+        assert_eq!(pair.kind, BracketKind::Bracket);
+    }
 }
