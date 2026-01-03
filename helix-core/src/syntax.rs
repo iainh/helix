@@ -231,6 +231,63 @@ impl LanguageData {
             .as_ref()
     }
 
+    /// Determine the bracket context at a position in the document.
+    ///
+    /// Uses tree-sitter node types to check if the position is inside a string,
+    /// comment, or regex. This works by walking up the tree from the deepest node
+    /// at the position and checking node kind names against common patterns.
+    ///
+    /// Falls back to `BracketContext::Code` if no matching context is found.
+    pub fn bracket_context_at(
+        &self,
+        tree: &Tree,
+        source: RopeSlice,
+        pos_char: usize,
+        _loader: &Loader,
+    ) -> crate::auto_pairs::BracketContext {
+        use crate::auto_pairs::BracketContext;
+
+        let pos_byte = source.char_to_byte(pos_char) as u32;
+
+        // Find the deepest node at this position
+        let Some(mut node) = tree.root_node().descendant_for_byte_range(pos_byte, pos_byte) else {
+            return BracketContext::Code;
+        };
+
+        // Walk up the tree checking node types
+        loop {
+            let kind = node.kind();
+
+            // Check for string-like nodes
+            if kind.contains("string")
+                || kind.contains("char")
+                || kind == "interpreted_string_literal"
+                || kind == "raw_string_literal"
+            {
+                return BracketContext::String;
+            }
+
+            // Check for comment-like nodes
+            if kind.contains("comment") {
+                return BracketContext::Comment;
+            }
+
+            // Check for regex-like nodes
+            if kind == "regex" || kind == "regex_literal" || kind == "regex_pattern" {
+                return BracketContext::Regex;
+            }
+
+            // Move to parent, stop if we reach the root
+            if let Some(parent) = node.parent() {
+                node = parent;
+            } else {
+                break;
+            }
+        }
+
+        BracketContext::Code
+    }
+
     fn reconfigure(&self, scopes: &[String]) {
         if let Some(Some(config)) = self.syntax.get() {
             reconfigure_highlights(config, scopes);
@@ -1206,9 +1263,95 @@ mod test {
     use once_cell::sync::Lazy;
 
     use super::*;
+    use crate::auto_pairs::BracketContext;
     use crate::{Rope, Transaction};
 
     static LOADER: Lazy<Loader> = Lazy::new(crate::config::default_lang_loader);
+
+    #[test]
+    fn test_bracket_context_at_code() {
+        let source = Rope::from_str("fn main() { let x = 1; }");
+        let language = LOADER.language_for_name("rust").unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &LOADER).unwrap();
+        let lang_data = LOADER.language(language);
+
+        // Position in regular code (after 'fn ')
+        let context = lang_data.bracket_context_at(syntax.tree(), source.slice(..), 3, &LOADER);
+        assert_eq!(context, BracketContext::Code);
+    }
+
+    #[test]
+    fn test_bracket_context_at_string() {
+        let source = Rope::from_str(r#"let s = "hello world";"#);
+        let language = LOADER.language_for_name("rust").unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &LOADER).unwrap();
+        let lang_data = LOADER.language(language);
+
+        // Position inside the string literal (at 'e' in 'hello')
+        let context = lang_data.bracket_context_at(syntax.tree(), source.slice(..), 10, &LOADER);
+        assert_eq!(context, BracketContext::String);
+    }
+
+    #[test]
+    fn test_bracket_context_at_comment() {
+        let source = Rope::from_str("// this is a comment\nlet x = 1;");
+        let language = LOADER.language_for_name("rust").unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &LOADER).unwrap();
+        let lang_data = LOADER.language(language);
+
+        // Position inside the comment (at 'is')
+        let context = lang_data.bracket_context_at(syntax.tree(), source.slice(..), 8, &LOADER);
+        assert_eq!(context, BracketContext::Comment);
+    }
+
+    #[test]
+    fn test_bracket_context_fallback_to_code() {
+        // Test that positions not inside string/comment/regex fall back to Code
+        let source = Rope::from_str("let x = 1;");
+        let language = LOADER.language_for_name("rust").unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &LOADER).unwrap();
+        let lang_data = LOADER.language(language);
+
+        let context = lang_data.bracket_context_at(syntax.tree(), source.slice(..), 0, &LOADER);
+        assert!(matches!(context, BracketContext::Code | BracketContext::Unknown));
+    }
+
+    #[test]
+    fn test_bracket_context_jinja_comment() {
+        // Test that tree-sitter node types detect comment context in jinja
+        // Source: {# this is a comment #}
+        let source = Rope::from_str("{# this is a comment #}");
+        let language = LOADER.language_for_name("jinja").unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &LOADER).unwrap();
+        let lang_data = LOADER.language(language);
+
+        // Position inside the comment (at 't' in 'this')
+        let context = lang_data.bracket_context_at(syntax.tree(), source.slice(..), 3, &LOADER);
+        assert_eq!(
+            context,
+            BracketContext::Comment,
+            "Position inside jinja comment should be detected as Comment context"
+        );
+    }
+
+    #[test]
+    fn test_bracket_context_jinja_code() {
+        // Test that tree-sitter node types detect code context in jinja
+        // Source: {{ variable }}
+        let source = Rope::from_str("{{ variable }}");
+        let language = LOADER.language_for_name("jinja").unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &LOADER).unwrap();
+        let lang_data = LOADER.language(language);
+
+        // Position inside the expression (at 'v' in 'variable')
+        // This should be Code since it's not inside a string or comment
+        let context = lang_data.bracket_context_at(syntax.tree(), source.slice(..), 3, &LOADER);
+        assert_eq!(
+            context,
+            BracketContext::Code,
+            "Position inside jinja expression should be Code context"
+        );
+    }
 
     #[test]
     fn test_textobject_queries() {

@@ -64,6 +64,37 @@ pub enum BracketKind {
     Custom,
 }
 
+/// The syntactic context at a position in the document.
+///
+/// Used to determine whether auto-pairing should be allowed based on
+/// the `allowed_contexts` field of a `BracketPair`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BracketContext {
+    /// Regular code (not inside string, comment, or regex)
+    #[default]
+    Code,
+    /// Inside a string literal
+    String,
+    /// Inside a comment
+    Comment,
+    /// Inside a regex literal
+    Regex,
+    /// Context could not be determined (treat as Code)
+    Unknown,
+}
+
+impl BracketContext {
+    /// Convert this context to the corresponding ContextMask flag.
+    pub fn to_mask(self) -> ContextMask {
+        match self {
+            BracketContext::Code | BracketContext::Unknown => ContextMask::CODE,
+            BracketContext::String => ContextMask::STRING,
+            BracketContext::Comment => ContextMask::COMMENT,
+            BracketContext::Regex => ContextMask::REGEX,
+        }
+    }
+}
+
 /// Represents a multi-character bracket pair configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BracketPair {
@@ -1012,6 +1043,31 @@ mod tests {
 
         let delimiter = BracketPair::from(("<!--", "-->"));
         assert_eq!(delimiter.kind, BracketKind::Delimiter);
+    }
+
+    #[test]
+    fn test_bracket_context_to_mask() {
+        assert_eq!(BracketContext::Code.to_mask(), ContextMask::CODE);
+        assert_eq!(BracketContext::String.to_mask(), ContextMask::STRING);
+        assert_eq!(BracketContext::Comment.to_mask(), ContextMask::COMMENT);
+        assert_eq!(BracketContext::Regex.to_mask(), ContextMask::REGEX);
+        assert_eq!(BracketContext::Unknown.to_mask(), ContextMask::CODE);
+    }
+
+    #[test]
+    fn test_bracket_context_allows_pair() {
+        let bracket = BracketPair::new("(", ")").with_contexts(ContextMask::CODE);
+        let quote = BracketPair::new("\"", "\"").with_contexts(ContextMask::CODE | ContextMask::STRING);
+
+        // Bracket only allowed in code
+        assert!(bracket.allowed_contexts.intersects(BracketContext::Code.to_mask()));
+        assert!(!bracket.allowed_contexts.intersects(BracketContext::String.to_mask()));
+        assert!(!bracket.allowed_contexts.intersects(BracketContext::Comment.to_mask()));
+
+        // Quote allowed in code and string
+        assert!(quote.allowed_contexts.intersects(BracketContext::Code.to_mask()));
+        assert!(quote.allowed_contexts.intersects(BracketContext::String.to_mask()));
+        assert!(!quote.allowed_contexts.intersects(BracketContext::Comment.to_mask()));
     }
 
     #[test]
