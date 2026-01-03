@@ -2174,7 +2174,7 @@ impl Document {
         &'a self,
         editor: &'a Editor,
         loader: &'a syntax::Loader,
-        view: &View,
+        _view: &View,
     ) -> Option<&'a AutoPairs> {
         let global_config = (editor.auto_pairs).as_ref();
 
@@ -2190,12 +2190,12 @@ impl Document {
         self.syntax
             .as_ref()
             .and_then(|syntax| {
-                let selection = self.selection(view.id).primary();
-                let (start, end) = selection.into_byte_range(self.text().slice(..));
-                let layer = syntax.layer_for_byte_range(start as u32, end as u32);
-
-                let lang_config = loader.language(syntax.layer(layer).language).config();
-                lang_config.auto_pairs.as_ref()
+                // For auto-pairs, prefer the root layer's config.
+                // This ensures that e.g. Jinja's {%/%} pairs work even when
+                // the cursor is in an HTML injection region.
+                let root_layer = syntax.root_layer();
+                let root_lang_config = loader.language(syntax.layer(root_layer).language).config();
+                root_lang_config.auto_pairs.as_ref()
             })
             .or(global_config)
     }
@@ -2207,7 +2207,7 @@ impl Document {
         &'a self,
         editor: &'a Editor,
         loader: &'a syntax::Loader,
-        view: &View,
+        _view: &View,
     ) -> Option<&'a BracketSet> {
         let global_config = editor.bracket_set.as_ref();
 
@@ -2223,12 +2223,12 @@ impl Document {
         self.syntax
             .as_ref()
             .and_then(|syntax| {
-                let selection = self.selection(view.id).primary();
-                let (start, end) = selection.into_byte_range(self.text().slice(..));
-                let layer = syntax.layer_for_byte_range(start as u32, end as u32);
-
-                let lang_config = loader.language(syntax.layer(layer).language).config();
-                lang_config.bracket_set.as_ref()
+                // For auto-pairs, prefer the root layer's bracket_set.
+                // This ensures that e.g. Jinja's {%/%} pairs work even when
+                // the cursor is in an HTML injection region.
+                let root_layer = syntax.root_layer();
+                let root_lang_config = loader.language(syntax.layer(root_layer).language).config();
+                root_lang_config.bracket_set.as_ref()
             })
             .or(global_config)
     }

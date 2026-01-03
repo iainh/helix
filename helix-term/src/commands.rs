@@ -4436,11 +4436,12 @@ pub mod insert {
         let count = cx.count();
         let (view, doc) = current_ref!(cx.editor);
         let text = doc.text().slice(..);
+        let full_doc = doc.text();
         let tab_width = doc.tab_width();
         let indent_width = doc.indent_width();
 
         let loader: &helix_core::syntax::Loader = &cx.editor.syn_loader.load();
-        let auto_pairs = doc.auto_pairs(cx.editor, loader, view);
+        let bracket_set = doc.bracket_set(cx.editor, loader, view);
 
         let transaction =
             Transaction::delete_by_selection(doc.text(), doc.selection(view.id), |range| {
@@ -4483,30 +4484,18 @@ pub mod insert {
                         }
                         (start, pos) // delete!
                     }
-                } else {
-                    match (
-                        text.get_char(pos.saturating_sub(1)),
-                        text.get_char(pos),
-                        auto_pairs,
-                    ) {
-                        (Some(_x), Some(_y), Some(ap))
-                            if range.is_single_grapheme(text)
-                                && ap.get(_x).is_some()
-                                && ap.get(_x).unwrap().open == _x
-                                && ap.get(_x).unwrap().close == _y =>
-                        // delete both autopaired characters
-                        {
-                            (
-                                graphemes::nth_prev_grapheme_boundary(text, pos, count),
-                                graphemes::nth_next_grapheme_boundary(text, pos, count),
-                            )
-                        }
-                        _ =>
-                        // delete 1 char
-                        {
-                            (graphemes::nth_prev_grapheme_boundary(text, pos, count), pos)
+                } else if range.is_single_grapheme(text) {
+                    // Try multi-char auto-pairs deletion
+                    if let Some(bs) = bracket_set {
+                        if let Some(del) = auto_pairs::detect_pair_for_deletion(full_doc, pos, bs) {
+                            return (pos - del.delete_before, pos + del.delete_after);
                         }
                     }
+                    // No auto-pair match, delete 1 char
+                    (graphemes::nth_prev_grapheme_boundary(text, pos, count), pos)
+                } else {
+                    // delete 1 char
+                    (graphemes::nth_prev_grapheme_boundary(text, pos, count), pos)
                 }
             });
         let (view, doc) = current!(cx.editor);

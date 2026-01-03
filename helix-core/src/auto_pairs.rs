@@ -404,6 +404,72 @@ pub fn detect_close_at<'a>(
     None
 }
 
+/// Result of detecting a bracketed pair around the cursor for deletion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletePairResult {
+    /// Number of characters to delete before the cursor (the open sequence)
+    pub delete_before: usize,
+    /// Number of characters to delete after the cursor (the close sequence)
+    pub delete_after: usize,
+}
+
+/// Detect if the cursor is positioned between a matched open/close pair for deletion.
+///
+/// This function checks if the characters immediately before the cursor match
+/// an opening sequence, and the characters immediately after match the corresponding
+/// closing sequence. If so, returns how many characters to delete on each side.
+///
+/// For example, with pairs `{` → `}` and `{%` → `%}`:
+/// - `{|}` returns `DeletePairResult { delete_before: 1, delete_after: 1 }`
+/// - `{%|%}` returns `DeletePairResult { delete_before: 2, delete_after: 2 }`
+///
+/// Returns `None` if the cursor is not between a matched pair.
+pub fn detect_pair_for_deletion(doc: &Rope, cursor: usize, set: &BracketSet) -> Option<DeletePairResult> {
+    if cursor == 0 {
+        return None;
+    }
+
+    let doc_len = doc.len_chars();
+    let mut best_match: Option<DeletePairResult> = None;
+
+    for pair in set.pairs() {
+        let open_len = pair.open.chars().count();
+        let close_len = pair.close.chars().count();
+
+        // Check if there's enough space before cursor for the open sequence
+        if cursor < open_len {
+            continue;
+        }
+
+        // Check if there's enough space after cursor for the close sequence
+        if cursor + close_len > doc_len {
+            continue;
+        }
+
+        // Extract the text before cursor (potential open sequence)
+        let open_start = cursor - open_len;
+        let before_slice = doc.slice(open_start..cursor);
+        let before_text: String = before_slice.chars().collect();
+
+        // Extract the text after cursor (potential close sequence)
+        let after_slice = doc.slice(cursor..cursor + close_len);
+        let after_text: String = after_slice.chars().collect();
+
+        // Check if both match
+        if before_text == pair.open && after_text == pair.close {
+            // Prefer longer matches (e.g., `{%|%}` over `{|}` when both could match)
+            if best_match.as_ref().map_or(true, |m| open_len + close_len > m.delete_before + m.delete_after) {
+                best_match = Some(DeletePairResult {
+                    delete_before: open_len,
+                    delete_after: close_len,
+                });
+            }
+        }
+    }
+
+    best_match
+}
+
 // ============================================================================
 // Legacy Single-Character Auto-Pairs (Backward Compatibility)
 // ============================================================================
@@ -1192,5 +1258,76 @@ mod tests {
         // - Insert "%%}" at position 5
         // Result: "test{%%}\n"
         assert_eq!(new_doc.to_string(), "test{%%}\n");
+    }
+
+    #[test]
+    fn test_detect_pair_for_deletion_single_char() {
+        let doc = Rope::from("test{}\n");
+        let set = BracketSet::from_default_pairs();
+
+        // Cursor at position 5 (between { and })
+        let result = detect_pair_for_deletion(&doc, 5, &set);
+        assert!(result.is_some());
+        let del = result.unwrap();
+        assert_eq!(del.delete_before, 1);
+        assert_eq!(del.delete_after, 1);
+    }
+
+    #[test]
+    fn test_detect_pair_for_deletion_multi_char() {
+        // String: "test{%%}\n"
+        // Positions: t(0) e(1) s(2) t(3) {(4) %(5) %(6) }(7) \n(8)
+        // Cursor at position 6 means we're between "{%" and "%}"
+        let doc = Rope::from("test{%%}\n");
+        let pairs = vec![
+            BracketPair::new("{", "}"),
+            BracketPair::new("{%", "%}"),
+        ];
+        let set = BracketSet::new(pairs);
+
+        // Cursor at position 6 (between {% and %})
+        let result = detect_pair_for_deletion(&doc, 6, &set);
+        assert!(result.is_some());
+        let del = result.unwrap();
+        assert_eq!(del.delete_before, 2);
+        assert_eq!(del.delete_after, 2);
+    }
+
+    #[test]
+    fn test_detect_pair_for_deletion_prefers_longer_match() {
+        // When both { and {% could match, prefer the longer one
+        let doc = Rope::from("{%%}\n");
+        let pairs = vec![
+            BracketPair::new("{", "}"),
+            BracketPair::new("{%", "%}"),
+        ];
+        let set = BracketSet::new(pairs);
+
+        // Cursor at position 2 (between {% and %})
+        let result = detect_pair_for_deletion(&doc, 2, &set);
+        assert!(result.is_some());
+        let del = result.unwrap();
+        assert_eq!(del.delete_before, 2);
+        assert_eq!(del.delete_after, 2);
+    }
+
+    #[test]
+    fn test_detect_pair_for_deletion_no_match() {
+        let doc = Rope::from("test\n");
+        let set = BracketSet::from_default_pairs();
+
+        // Cursor at position 2, no brackets around
+        let result = detect_pair_for_deletion(&doc, 2, &set);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_detect_pair_for_deletion_at_start() {
+        let doc = Rope::from("{}\n");
+        let set = BracketSet::from_default_pairs();
+
+        // Cursor at position 0, can't delete before
+        let result = detect_pair_for_deletion(&doc, 0, &set);
+        assert!(result.is_none());
     }
 }
