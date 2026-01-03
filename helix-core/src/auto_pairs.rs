@@ -401,6 +401,14 @@ fn find_prefix_close_to_replace(
     }
 }
 
+/// Check if a pair should be active in the given context.
+///
+/// Returns true if the pair's `allowed_contexts` mask intersects with
+/// the mask corresponding to the given context.
+pub fn context_allows_pair(context: BracketContext, pair: &BracketPair) -> bool {
+    pair.allowed_contexts.intersects(context.to_mask())
+}
+
 /// Detect if a close sequence matches at the cursor position.
 ///
 /// This looks forward from the cursor to see if the close sequence is present.
@@ -627,7 +635,174 @@ pub fn hook(doc: &Rope, selection: &Selection, ch: char, pairs: &AutoPairs) -> O
 }
 
 // ============================================================================
-// New Multi-Character Hook
+// AutoPairState and Context-Aware Hook
+// ============================================================================
+
+/// State passed to the auto-pairs hook for context-aware pairing.
+///
+/// This struct encapsulates all the information needed to determine whether
+/// auto-pairing should occur and what the result should be.
+#[derive(Debug, Clone)]
+pub struct AutoPairState<'a> {
+    /// The document being edited
+    pub doc: &'a Rope,
+    /// The current selection
+    pub selection: &'a Selection,
+    /// The bracket set to use for pairing
+    pub pairs: &'a BracketSet,
+    /// The syntactic context at each cursor position (indexed by selection range)
+    /// If None, context checking is disabled and all pairs are allowed.
+    pub contexts: Option<&'a [BracketContext]>,
+}
+
+impl<'a> AutoPairState<'a> {
+    /// Create a new AutoPairState without context information.
+    pub fn new(doc: &'a Rope, selection: &'a Selection, pairs: &'a BracketSet) -> Self {
+        Self {
+            doc,
+            selection,
+            pairs,
+            contexts: None,
+        }
+    }
+
+    /// Create a new AutoPairState with context information.
+    pub fn with_contexts(
+        doc: &'a Rope,
+        selection: &'a Selection,
+        pairs: &'a BracketSet,
+        contexts: &'a [BracketContext],
+    ) -> Self {
+        Self {
+            doc,
+            selection,
+            pairs,
+            contexts: Some(contexts),
+        }
+    }
+
+    /// Get the context for a specific range index, defaulting to Code if not available.
+    fn context_for_range(&self, range_idx: usize) -> BracketContext {
+        self.contexts
+            .and_then(|ctx| ctx.get(range_idx).copied())
+            .unwrap_or(BracketContext::Code)
+    }
+}
+
+/// Hook for multi-character auto-pairs with context awareness.
+///
+/// This is the context-aware entry point that supports multi-character pairs like ```,
+/// `{% %}`, `<!-- -->`, etc., and respects syntactic context (code, string, comment).
+///
+/// Returns `Some(Transaction)` when auto-pairing should occur. The transaction
+/// includes BOTH the typed character AND the closing sequence.
+/// Returns `None` when no auto-pair action is needed (caller should insert normally).
+#[must_use]
+pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transaction> {
+    log::trace!("autopairs hook_with_context selection: {:#?}", state.selection);
+
+    let mut end_ranges = SmallVec::with_capacity(state.selection.len());
+    let mut offs = 0;
+    let mut made_changes = false;
+
+    let transaction = Transaction::change_by_selection(state.doc, state.selection, |start_range| {
+        let cursor = start_range.cursor(state.doc.slice(..));
+        let range_idx = state.selection.ranges().iter().position(|r| r == start_range).unwrap_or(0);
+        let context = state.context_for_range(range_idx);
+
+        // Try to detect a completed trigger (the char is about to be typed at cursor)
+        if let Some(pair) = detect_trigger_at(state.doc, cursor, ch, state.pairs) {
+            // Check context gating
+            if !context_allows_pair(context, pair) {
+                // Context doesn't allow this pair, insert just the typed char
+                let mut t = Tendril::new();
+                t.push(ch);
+                let next_range = get_next_range(state.doc, start_range, offs, 1);
+                end_ranges.push(next_range);
+                offs += 1;
+                made_changes = true;
+                return (cursor, cursor, Some(t));
+            }
+
+            let next_char = state.doc.get_char(cursor);
+
+            // For symmetric pairs (quotes), check if we should skip over existing close
+            if pair.same() && next_char == Some(ch) {
+                // Skip over the close - no change needed, just move cursor
+                let next_range = get_next_range(state.doc, start_range, offs, 0);
+                end_ranges.push(next_range);
+                made_changes = true;
+                return (cursor, cursor, None);
+            }
+
+            // Check if we should insert the pair
+            if pair.should_close(state.doc, start_range) {
+                // Check if a prefix of this trigger was already auto-paired with a
+                // single-char close that we need to replace.
+                let prefix_close_to_remove =
+                    find_prefix_close_to_replace(state.doc, cursor, ch, pair, state.pairs);
+
+                let mut pair_str = Tendril::new();
+                pair_str.push(ch);
+                pair_str.push_str(&pair.close);
+
+                let len_inserted = pair_str.chars().count();
+
+                // Calculate range changes accounting for removed close char
+                let (delete_start, delete_end) = if let Some(close_char_pos) = prefix_close_to_remove
+                {
+                    // Delete from cursor to after the old close char
+                    (cursor, close_char_pos + 1)
+                } else {
+                    (cursor, cursor)
+                };
+
+                let chars_removed = delete_end - delete_start;
+                let net_inserted = len_inserted.saturating_sub(chars_removed);
+
+                let next_range = get_next_range(state.doc, start_range, offs, net_inserted);
+                end_ranges.push(next_range);
+                offs = offs + len_inserted - chars_removed;
+                made_changes = true;
+                return (delete_start, delete_end, Some(pair_str));
+            } else {
+                // Conditions not met for auto-close, insert just the typed char
+                let mut t = Tendril::new();
+                t.push(ch);
+                let next_range = get_next_range(state.doc, start_range, offs, 1);
+                end_ranges.push(next_range);
+                offs += 1;
+                made_changes = true;
+                return (cursor, cursor, Some(t));
+            }
+        }
+
+        // Check if we're typing a close character and should skip over it
+        if let Some(pair) = detect_close_at(state.doc, cursor, ch, state.pairs) {
+            if !pair.same() {
+                // Non-symmetric pair: skip over the close
+                let next_range = get_next_range(state.doc, start_range, offs, 0);
+                end_ranges.push(next_range);
+                made_changes = true;
+                return (cursor, cursor, None);
+            }
+        }
+
+        // No auto-pair action, return no-op (caller will insert normally)
+        let next_range = get_next_range(state.doc, start_range, offs, 0);
+        end_ranges.push(next_range);
+        (cursor, cursor, None)
+    });
+
+    if made_changes {
+        Some(transaction.with_selection(Selection::new(end_ranges, state.selection.primary_index())))
+    } else {
+        None
+    }
+}
+
+// ============================================================================
+// New Multi-Character Hook (Without Context)
 // ============================================================================
 
 /// Hook for multi-character auto-pairs.
@@ -1385,5 +1560,166 @@ mod tests {
         // Cursor at position 0, can't delete before
         let result = detect_pair_for_deletion(&doc, 0, &set);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_context_allows_pair_code() {
+        let pair = BracketPair::new("(", ")").with_contexts(ContextMask::CODE);
+
+        // CODE context should allow CODE-only pair
+        assert!(context_allows_pair(BracketContext::Code, &pair));
+        // STRING context should NOT allow CODE-only pair
+        assert!(!context_allows_pair(BracketContext::String, &pair));
+        // COMMENT context should NOT allow CODE-only pair
+        assert!(!context_allows_pair(BracketContext::Comment, &pair));
+        // Unknown falls back to CODE
+        assert!(context_allows_pair(BracketContext::Unknown, &pair));
+    }
+
+    #[test]
+    fn test_context_allows_pair_multi_context() {
+        let pair = BracketPair::new("\"", "\"")
+            .with_contexts(ContextMask::CODE | ContextMask::STRING);
+
+        assert!(context_allows_pair(BracketContext::Code, &pair));
+        assert!(context_allows_pair(BracketContext::String, &pair));
+        assert!(!context_allows_pair(BracketContext::Comment, &pair));
+    }
+
+    #[test]
+    fn test_context_allows_pair_all_contexts() {
+        let pair = BracketPair::new("(", ")").with_contexts(ContextMask::ALL);
+
+        assert!(context_allows_pair(BracketContext::Code, &pair));
+        assert!(context_allows_pair(BracketContext::String, &pair));
+        assert!(context_allows_pair(BracketContext::Comment, &pair));
+        assert!(context_allows_pair(BracketContext::Regex, &pair));
+    }
+
+    #[test]
+    fn test_auto_pair_state_creation() {
+        let doc = Rope::from("test\n");
+        let selection = Selection::single(4, 5);
+        let pairs = BracketSet::from_default_pairs();
+
+        let state = AutoPairState::new(&doc, &selection, &pairs);
+        assert!(state.contexts.is_none());
+
+        let contexts = vec![BracketContext::Code];
+        let state_with_ctx = AutoPairState::with_contexts(&doc, &selection, &pairs, &contexts);
+        assert!(state_with_ctx.contexts.is_some());
+    }
+
+    #[test]
+    fn test_hook_with_context_in_code() {
+        let doc = Rope::from("test\n");
+        let selection = Selection::single(4, 5);
+        let pairs = BracketSet::from_default_pairs();
+        let contexts = vec![BracketContext::Code];
+
+        let state = AutoPairState::with_contexts(&doc, &selection, &pairs, &contexts);
+        let result = hook_with_context(&state, '(');
+
+        assert!(result.is_some());
+        let transaction = result.unwrap();
+        let mut new_doc = doc.clone();
+        assert!(transaction.apply(&mut new_doc));
+        assert_eq!(new_doc.to_string(), "test()\n");
+    }
+
+    #[test]
+    fn test_hook_with_context_blocked_in_string() {
+        let doc = Rope::from("test\n");
+        let selection = Selection::single(4, 5);
+        // Bracket only allowed in CODE context
+        let pairs = BracketSet::new(vec![
+            BracketPair::new("(", ")").with_contexts(ContextMask::CODE),
+        ]);
+        // But we're in a STRING context
+        let contexts = vec![BracketContext::String];
+
+        let state = AutoPairState::with_contexts(&doc, &selection, &pairs, &contexts);
+        let result = hook_with_context(&state, '(');
+
+        assert!(result.is_some());
+        let transaction = result.unwrap();
+        let mut new_doc = doc.clone();
+        assert!(transaction.apply(&mut new_doc));
+        // Should only insert the typed char, NOT the pair
+        assert_eq!(new_doc.to_string(), "test(\n");
+    }
+
+    #[test]
+    fn test_hook_with_context_allowed_in_string() {
+        // Use a space before cursor so quotes will pair (not after alphanumeric)
+        let doc = Rope::from("test \n");
+        let selection = Selection::single(5, 6);
+        // Quote allowed in CODE and STRING contexts
+        let pairs = BracketSet::new(vec![
+            BracketPair::new("'", "'")
+                .with_kind(BracketKind::Quote)
+                .with_contexts(ContextMask::CODE | ContextMask::STRING),
+        ]);
+        // We're in a STRING context
+        let contexts = vec![BracketContext::String];
+
+        let state = AutoPairState::with_contexts(&doc, &selection, &pairs, &contexts);
+        let result = hook_with_context(&state, '\'');
+
+        assert!(result.is_some());
+        let transaction = result.unwrap();
+        let mut new_doc = doc.clone();
+        assert!(transaction.apply(&mut new_doc));
+        // Should insert the pair since quotes are allowed in strings
+        assert_eq!(new_doc.to_string(), "test ''\n");
+    }
+
+    #[test]
+    fn test_hook_with_context_no_context_defaults_to_code() {
+        let doc = Rope::from("test\n");
+        let selection = Selection::single(4, 5);
+        let pairs = BracketSet::new(vec![
+            BracketPair::new("(", ")").with_contexts(ContextMask::CODE),
+        ]);
+
+        // No contexts provided - should default to CODE
+        let state = AutoPairState::new(&doc, &selection, &pairs);
+        let result = hook_with_context(&state, '(');
+
+        assert!(result.is_some());
+        let transaction = result.unwrap();
+        let mut new_doc = doc.clone();
+        assert!(transaction.apply(&mut new_doc));
+        assert_eq!(new_doc.to_string(), "test()\n");
+    }
+
+    #[test]
+    fn test_hook_with_context_multi_cursor_different_contexts() {
+        // Original: "code \"str\" code\n"
+        // Positions: c(0) o(1) d(2) e(3) " "(4) \"(5) s(6) t(7) r(8) \"(9) ...
+        let doc = Rope::from("code \"str\" code\n");
+        // Two cursors: one in code (pos 4 = space), one in string (pos 7 = 't')
+        let selection = Selection::new(
+            smallvec::smallvec![Range::new(4, 5), Range::new(7, 8)],
+            0,
+        );
+        let pairs = BracketSet::new(vec![
+            BracketPair::new("(", ")").with_contexts(ContextMask::CODE),
+        ]);
+        // First cursor in CODE, second in STRING
+        let contexts = vec![BracketContext::Code, BracketContext::String];
+
+        let state = AutoPairState::with_contexts(&doc, &selection, &pairs, &contexts);
+        let result = hook_with_context(&state, '(');
+
+        assert!(result.is_some());
+        let transaction = result.unwrap();
+        let mut new_doc = doc.clone();
+        assert!(transaction.apply(&mut new_doc));
+        // First cursor (pos 4) gets pair "()" in CODE context
+        // Second cursor (pos 7) gets just "(" in STRING context (pair not allowed)
+        // After first insert at pos 4: "code() \"str\" code\n" (inserted 2 chars)
+        // After second insert at pos 7+2=9: "code() \"s(tr\" code\n" (inserted 1 char)
+        assert_eq!(new_doc.to_string(), "code() \"s(tr\" code\n");
     }
 }

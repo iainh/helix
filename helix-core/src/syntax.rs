@@ -1353,6 +1353,151 @@ mod test {
         );
     }
 
+    // =========================================================================
+    // Integration tests: Full context-aware auto-pairing with tree-sitter
+    // =========================================================================
+
+    #[test]
+    fn test_auto_pairs_with_context_rust_code_vs_string() {
+        use crate::auto_pairs::{
+            hook_with_context, AutoPairState, BracketPair, BracketSet, ContextMask,
+        };
+        use crate::Selection;
+
+        // Rust code with a string - add newline to allow valid selections
+        // "let s = \"hello \"; \n" - 20 chars (0-19), \n at 19
+        let source = Rope::from_str("let s = \"hello \"; \n");
+        let language = LOADER.language_for_name("rust").unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &LOADER).unwrap();
+        let lang_data = LOADER.language(language);
+
+        // Create a bracket set where ( only works in CODE context
+        let pairs = BracketSet::new(vec![
+            BracketPair::new("(", ")").with_contexts(ContextMask::CODE),
+        ]);
+
+        // Test 1: Position 18 (after "; ") - CODE context with space before and \n after
+        let pos_code = 18;
+        let ctx_code = lang_data.bracket_context_at(syntax.tree(), source.slice(..), pos_code, &LOADER);
+        assert_eq!(ctx_code, BracketContext::Code, "Position 18 should be Code");
+
+        let selection_code = Selection::single(pos_code, pos_code + 1);
+        let contexts_code = vec![ctx_code];
+        let state_code = AutoPairState::with_contexts(&source, &selection_code, &pairs, &contexts_code);
+        
+        let result_code = hook_with_context(&state_code, '(');
+        assert!(result_code.is_some(), "Should auto-pair in code context");
+        
+        let mut doc_code = source.clone();
+        result_code.unwrap().apply(&mut doc_code);
+        assert_eq!(doc_code.to_string(), "let s = \"hello \"; ()\n", 
+            "In CODE context: typing '(' should insert '()'");
+
+        // Test 2: Position 14 (at space in "hello ", inside string) - STRING context
+        // String: "let s = \"hello \"; \n"
+        //          0123456789012345678901
+        // Position 14 is the space character inside the string
+        let pos_string = 14;
+        let ctx_string = lang_data.bracket_context_at(syntax.tree(), source.slice(..), pos_string, &LOADER);
+        assert_eq!(ctx_string, BracketContext::String, "Position 14 should be String");
+
+        let selection_string = Selection::single(pos_string, pos_string + 1);
+        let contexts_string = vec![ctx_string];
+        let state_string = AutoPairState::with_contexts(&source, &selection_string, &pairs, &contexts_string);
+        
+        let result_string = hook_with_context(&state_string, '(');
+        assert!(result_string.is_some(), "Should return transaction even when blocked");
+        
+        let mut doc_string = source.clone();
+        result_string.unwrap().apply(&mut doc_string);
+        // Insertion at position 14 (before space), so: "hello" + "(" + " " = "hello( "
+        assert_eq!(doc_string.to_string(), "let s = \"hello( \"; \n",
+            "In STRING context: typing '(' should insert only '(' (no closing paren)");
+
+        println!("✓ Context detection works:");
+        println!("  - Position 18 (code):   '(' -> '()'  [auto-paired]");
+        println!("  - Position 14 (string): '(' -> '('   [single char only]");
+    }
+
+    #[test]
+    fn test_auto_pairs_with_context_rust_comment() {
+        use crate::auto_pairs::{
+            hook_with_context, AutoPairState, BracketPair, BracketSet, ContextMask,
+        };
+        use crate::Selection;
+
+        // Rust code with a comment
+        let source = Rope::from_str("// comment here\nlet x = 1;");
+        let language = LOADER.language_for_name("rust").unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &LOADER).unwrap();
+        let lang_data = LOADER.language(language);
+
+        let pairs = BracketSet::new(vec![
+            BracketPair::new("(", ")").with_contexts(ContextMask::CODE),
+        ]);
+
+        // Position 5 is inside the comment ("comment")
+        let pos_comment = 5;
+        let ctx = lang_data.bracket_context_at(syntax.tree(), source.slice(..), pos_comment, &LOADER);
+        assert_eq!(ctx, BracketContext::Comment, "Position 5 should be Comment");
+
+        let selection = Selection::single(pos_comment, pos_comment + 1);
+        let contexts = vec![ctx];
+        let state = AutoPairState::with_contexts(&source, &selection, &pairs, &contexts);
+        
+        let result = hook_with_context(&state, '(');
+        let mut doc = source.clone();
+        result.unwrap().apply(&mut doc);
+        
+        // In comment: should only insert '(' not '()'
+        assert_eq!(doc.to_string(), "// co(mment here\nlet x = 1;",
+            "In COMMENT context: typing '(' should insert only '('");
+        
+        println!("✓ Comment context detection works: '(' -> '(' [no auto-pair]");
+    }
+
+    #[test]
+    fn test_auto_pairs_triple_quotes_python() {
+        use crate::auto_pairs::{
+            hook_with_context, AutoPairState, BracketPair, BracketSet, ContextMask, BracketKind,
+        };
+        use crate::Selection;
+
+        // Python code - test triple quote auto-pairing
+        // Add newline for valid selection range
+        let source = Rope::from_str("def foo():\n    \"\"\n");  // Two quotes already typed, 18 chars
+        let language = LOADER.language_for_name("python").unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &LOADER).unwrap();
+        let lang_data = LOADER.language(language);
+
+        // Position 17 is after the two quotes (before \n)
+        let pos = 17;
+        let ctx = lang_data.bracket_context_at(syntax.tree(), source.slice(..), pos, &LOADER);
+        
+        // Build pairs with triple quotes
+        let pairs = BracketSet::new(vec![
+            BracketPair::new("\"", "\"").with_kind(BracketKind::Quote).with_contexts(ContextMask::CODE),
+            BracketPair::new("\"\"\"", "\"\"\"").with_kind(BracketKind::Quote).with_contexts(ContextMask::CODE),
+        ]);
+
+        let selection = Selection::single(pos, pos + 1);
+        let contexts = vec![ctx];
+        let state = AutoPairState::with_contexts(&source, &selection, &pairs, &contexts);
+        
+        // Type the third quote
+        let result = hook_with_context(&state, '"');
+        assert!(result.is_some());
+        
+        let mut doc = source.clone();
+        result.unwrap().apply(&mut doc);
+        
+        // Should complete triple quotes: "" + " -> """"""
+        assert_eq!(doc.to_string(), "def foo():\n    \"\"\"\"\"\"\n",
+            "Typing third quote should complete triple-quote pair");
+        
+        println!("✓ Multi-char pairs work: '\"\"' + '\"' -> '\"\"\"\"\"\"' [triple quotes]");
+    }
+
     #[test]
     fn test_textobject_queries() {
         let query_str = r#"
