@@ -266,6 +266,12 @@ Enables automatic insertion of pairs to parentheses, brackets, etc. Can be a
 simple boolean value, a specific mapping of pairs of single characters, or an
 advanced array configuration for multi-character pairs.
 
+Helix ships with language-specific auto-pairs defaults in `auto-pairs.toml`
+(located next to `languages.toml`). These provide sensible defaults for many
+languages, including multi-character pairs like `{%`/`%}` for template languages
+and `<!--`/`-->` for HTML/XML. You can override these defaults at the user or
+workspace level by creating your own `auto-pairs.toml` file.
+
 To disable auto-pairs altogether, set `auto-pairs` to `false`:
 
 ```toml
@@ -356,6 +362,65 @@ Each pair object supports the following fields:
 The `allowed-contexts` field uses tree-sitter to detect the syntactic context
 at the cursor position, allowing context-aware auto-pairing (e.g., disabling
 bracket pairing inside strings or comments).
+
+#### The `auto-pairs.toml` File
+
+Helix includes a built-in `auto-pairs.toml` that provides language-specific
+defaults. This file is structured with one section per language:
+
+```toml
+[default]
+pairs = [
+  { open = "(", close = ")" },
+  { open = "{", close = "}" },
+  { open = "[", close = "]" },
+  { open = "\"", close = "\"", kind = "quote" },
+  { open = "'", close = "'", kind = "quote" },
+  { open = "`", close = "`", kind = "quote" },
+]
+
+[html]
+pairs = [
+  { open = "(", close = ")" },
+  { open = "{", close = "}" },
+  { open = "[", close = "]" },
+  { open = "\"", close = "\"", kind = "quote" },
+  { open = "'", close = "'", kind = "quote" },
+  { open = "`", close = "`", kind = "quote" },
+  { open = "<", close = ">" },
+  { open = "<!--", close = "-->", kind = "delimiter" },
+]
+
+[jinja]
+pairs = [
+  { open = "(", close = ")" },
+  { open = "{", close = "}" },
+  { open = "[", close = "]" },
+  { open = "\"", close = "\"", kind = "quote" },
+  { open = "'", close = "'", kind = "quote" },
+  { open = "<", close = ">" },
+  { open = "{%", close = "%}", kind = "delimiter" },
+  { open = "{{", close = "}}", kind = "delimiter" },
+  { open = "{#", close = "#}", kind = "delimiter" },
+]
+```
+
+Languages without a specific section fall back to `[default]`.
+
+You can override these defaults by creating your own `auto-pairs.toml` in:
+
+- `~/.config/helix/auto-pairs.toml` (user-level)
+- `.helix/auto-pairs.toml` (workspace-level)
+
+**Configuration precedence** (highest to lowest):
+
+1. Explicit `auto-pairs` in `languages.toml` (per-language)
+2. Workspace `.helix/auto-pairs.toml`
+3. User `~/.config/helix/auto-pairs.toml`
+4. Built-in `auto-pairs.toml`
+
+When you define a language section in your `auto-pairs.toml`, it completely
+replaces the built-in pairs for that language (no merging of individual pairs).
 
 ### `[editor.auto-save]` Section
 

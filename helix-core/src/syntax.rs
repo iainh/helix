@@ -28,7 +28,9 @@ use tree_house::{
     Error, InjectionLanguageMarker, LanguageConfig as SyntaxConfig, Layer,
 };
 
-use crate::{indent::IndentQuery, tree_sitter, ChangeSet, Language};
+use crate::{
+    auto_pairs::AutoPairsRegistry, indent::IndentQuery, tree_sitter, ChangeSet, Language,
+};
 
 pub use tree_house::{
     highlighter::{Highlight, HighlightEvent},
@@ -336,12 +338,20 @@ pub struct Loader {
     languages_glob_matcher: FileTypeGlobMatcher,
     language_server_configs: HashMap<String, LanguageServerConfiguration>,
     scopes: ArcSwap<Vec<String>>,
+    auto_pairs_registry: AutoPairsRegistry,
 }
 
 pub type LoaderError = globset::Error;
 
 impl Loader {
     pub fn new(config: Configuration) -> Result<Self, LoaderError> {
+        Self::new_with_auto_pairs(config, AutoPairsRegistry::new())
+    }
+
+    pub fn new_with_auto_pairs(
+        config: Configuration,
+        auto_pairs_registry: AutoPairsRegistry,
+    ) -> Result<Self, LoaderError> {
         let mut languages = Vec::with_capacity(config.language.len());
         let mut languages_by_extension = HashMap::new();
         let mut languages_by_shebang = HashMap::new();
@@ -351,10 +361,16 @@ impl Loader {
             let language = Language(languages.len() as u32);
             config.language = Some(language);
 
-            // Populate auto_pairs and bracket_set from auto_pair_config
+            // Populate auto_pairs and bracket_set from auto_pair_config if explicitly set
             if let Some(ref apc) = config.auto_pair_config {
                 config.auto_pairs = apc.into();
                 config.bracket_set = apc.into();
+            } else {
+                // Fall back to auto-pairs.toml registry
+                let bracket_set = auto_pairs_registry.get(&config.language_id).clone();
+                config.bracket_set = Some(bracket_set.clone());
+                // Also populate legacy auto_pairs from the bracket_set's single-char pairs
+                config.auto_pairs = Some(crate::auto_pairs::AutoPairs::from(&bracket_set));
             }
 
             for file_type in &config.file_types {
@@ -381,7 +397,12 @@ impl Loader {
             languages_glob_matcher: FileTypeGlobMatcher::new(file_type_globs)?,
             language_server_configs: config.language_server,
             scopes: ArcSwap::from_pointee(Vec::new()),
+            auto_pairs_registry,
         })
+    }
+
+    pub fn auto_pairs_registry(&self) -> &AutoPairsRegistry {
+        &self.auto_pairs_registry
     }
 
     pub fn languages(&self) -> impl ExactSizeIterator<Item = (Language, &LanguageData)> {

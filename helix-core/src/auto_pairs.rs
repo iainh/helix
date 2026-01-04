@@ -630,6 +630,22 @@ impl Default for AutoPairs {
     }
 }
 
+impl From<&BracketSet> for AutoPairs {
+    fn from(bracket_set: &BracketSet) -> Self {
+        let pairs: Vec<(char, char)> = bracket_set
+            .pairs()
+            .iter()
+            .filter(|p| p.open.len() == 1 && p.close.len() == 1)
+            .filter_map(|p| {
+                let open = p.open.chars().next()?;
+                let close = p.close.chars().next()?;
+                Some((open, close))
+            })
+            .collect();
+        AutoPairs::new(pairs.iter())
+    }
+}
+
 // insert hook:
 // Fn(doc, selection, char) => Option<Transaction>
 // problem is, we want to do this per range, so we can call default handler for some ranges
@@ -1208,6 +1224,174 @@ fn handle_same(doc: &Rope, selection: &Selection, pair: &Pair) -> Transaction {
     log::debug!("auto pair transaction: {:#?}", t);
     t
 }
+
+/// Registry of auto-pairs loaded from auto-pairs.toml.
+///
+/// This provides a central store of per-language bracket configurations that
+/// can be looked up by language name. Languages without explicit configuration
+/// fall back to the `default` entry.
+#[derive(Debug, Clone, Default)]
+pub struct AutoPairsRegistry {
+    languages: HashMap<String, BracketSet>,
+    default: BracketSet,
+}
+
+impl AutoPairsRegistry {
+    /// Create a new empty registry with default pairs.
+    pub fn new() -> Self {
+        Self {
+            languages: HashMap::new(),
+            default: BracketSet::from_default_pairs(),
+        }
+    }
+
+    /// Load registry from a parsed TOML value (from auto-pairs.toml).
+    ///
+    /// The TOML structure is expected to be:
+    /// ```toml
+    /// [default]
+    /// pairs = [{ open = "(", close = ")" }, ...]
+    ///
+    /// [rust]
+    /// pairs = [{ open = "(", close = ")" }, ...]
+    /// ```
+    pub fn from_toml(value: &toml::Value) -> Result<Self, AutoPairsRegistryError> {
+        let table = value
+            .as_table()
+            .ok_or(AutoPairsRegistryError::InvalidFormat("expected table"))?;
+
+        let mut languages = HashMap::new();
+        let mut default = BracketSet::from_default_pairs();
+
+        for (key, val) in table {
+            let pairs = Self::parse_pairs(val)?;
+            let bracket_set = BracketSet::new(pairs);
+
+            if key == "default" {
+                default = bracket_set;
+            } else {
+                languages.insert(key.clone(), bracket_set);
+            }
+        }
+
+        Ok(Self { languages, default })
+    }
+
+    fn parse_pairs(val: &toml::Value) -> Result<Vec<BracketPair>, AutoPairsRegistryError> {
+        let pairs_val = val
+            .get("pairs")
+            .ok_or(AutoPairsRegistryError::InvalidFormat("missing 'pairs' key"))?;
+
+        let pairs_arr = pairs_val
+            .as_array()
+            .ok_or(AutoPairsRegistryError::InvalidFormat("'pairs' must be array"))?;
+
+        let mut pairs = Vec::with_capacity(pairs_arr.len());
+
+        for pair_val in pairs_arr {
+            let open = pair_val
+                .get("open")
+                .and_then(|v| v.as_str())
+                .ok_or(AutoPairsRegistryError::InvalidFormat("pair missing 'open'"))?;
+
+            let close = pair_val
+                .get("close")
+                .and_then(|v| v.as_str())
+                .ok_or(AutoPairsRegistryError::InvalidFormat("pair missing 'close'"))?;
+
+            let mut bracket_pair = BracketPair::new(open, close);
+
+            if let Some(kind_str) = pair_val.get("kind").and_then(|v| v.as_str()) {
+                bracket_pair = bracket_pair.with_kind(match kind_str {
+                    "bracket" => BracketKind::Bracket,
+                    "quote" => BracketKind::Quote,
+                    "delimiter" => BracketKind::Delimiter,
+                    "tag" => BracketKind::Tag,
+                    "custom" => BracketKind::Custom,
+                    _ => BracketKind::Bracket,
+                });
+            } else {
+                let kind = if open == close {
+                    BracketKind::Quote
+                } else if open.len() > 1 || close.len() > 1 {
+                    BracketKind::Delimiter
+                } else {
+                    BracketKind::Bracket
+                };
+                bracket_pair = bracket_pair.with_kind(kind);
+            }
+
+            if let Some(trigger) = pair_val.get("trigger").and_then(|v| v.as_str()) {
+                bracket_pair = bracket_pair.with_trigger(trigger);
+            }
+
+            if let Some(surround) = pair_val.get("surround").and_then(|v| v.as_bool()) {
+                bracket_pair = bracket_pair.with_surround(surround);
+            }
+
+            if let Some(contexts) = pair_val.get("allowed-contexts").and_then(|v| v.as_array()) {
+                let mut mask = ContextMask::empty();
+                for ctx in contexts {
+                    if let Some(ctx_str) = ctx.as_str() {
+                        match ctx_str {
+                            "code" => mask |= ContextMask::CODE,
+                            "string" => mask |= ContextMask::STRING,
+                            "comment" => mask |= ContextMask::COMMENT,
+                            "regex" => mask |= ContextMask::REGEX,
+                            "all" => mask |= ContextMask::ALL,
+                            _ => {}
+                        }
+                    }
+                }
+                if !mask.is_empty() {
+                    bracket_pair = bracket_pair.with_contexts(mask);
+                }
+            }
+
+            pairs.push(bracket_pair);
+        }
+
+        Ok(pairs)
+    }
+
+    /// Get the BracketSet for a language, falling back to default if not found.
+    pub fn get(&self, language_name: &str) -> &BracketSet {
+        self.languages.get(language_name).unwrap_or(&self.default)
+    }
+
+    /// Check if a specific language has configuration.
+    pub fn has_language(&self, language_name: &str) -> bool {
+        self.languages.contains_key(language_name)
+    }
+
+    /// Get the default BracketSet.
+    pub fn default_set(&self) -> &BracketSet {
+        &self.default
+    }
+
+    /// Get all configured language names.
+    pub fn language_names(&self) -> impl Iterator<Item = &str> {
+        self.languages.keys().map(|s| s.as_str())
+    }
+}
+
+/// Error type for AutoPairsRegistry parsing.
+#[derive(Debug, Clone)]
+pub enum AutoPairsRegistryError {
+    InvalidFormat(&'static str),
+}
+
+impl std::fmt::Display for AutoPairsRegistryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AutoPairsRegistryError::InvalidFormat(msg) => {
+                write!(f, "invalid auto-pairs.toml format: {}", msg)
+            }
+        }
+    }
+}
+
+impl std::error::Error for AutoPairsRegistryError {}
 
 #[cfg(test)]
 mod tests {
