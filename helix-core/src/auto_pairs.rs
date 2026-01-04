@@ -540,10 +540,12 @@ pub fn detect_pair_for_deletion(doc: &Rope, cursor: usize, set: &BracketSet) -> 
 
 /// The type that represents the collection of auto pairs,
 /// keyed by both opener and closer.
+#[deprecated(note = "Use BracketSet instead, which supports multi-character pairs and context awareness")]
 #[derive(Debug, Clone)]
 pub struct AutoPairs(HashMap<char, Pair>);
 
 /// Represents the config for a particular pairing.
+#[deprecated(note = "Use BracketPair instead, which supports multi-character pairs and context awareness")]
 #[derive(Debug, Clone, Copy)]
 pub struct Pair {
     pub open: char,

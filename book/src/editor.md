@@ -263,7 +263,8 @@ start-position = "previous"
 ### `[editor.auto-pairs]` Section
 
 Enables automatic insertion of pairs to parentheses, brackets, etc. Can be a
-simple boolean value, or a specific mapping of pairs of single characters.
+simple boolean value, a specific mapping of pairs of single characters, or an
+advanced array configuration for multi-character pairs.
 
 To disable auto-pairs altogether, set `auto-pairs` to `false`:
 
@@ -303,6 +304,58 @@ name = "rust"
 '`' = '`'
 '<' = '>'
 ```
+
+#### Multi-Character Pairs
+
+For languages that need multi-character pairs (like triple quotes or template
+delimiters), use the array syntax in `languages.toml`:
+
+```toml
+[[language]]
+name = "python"
+auto-pairs = [
+  { open = "(", close = ")", kind = "bracket" },
+  { open = "[", close = "]", kind = "bracket" },
+  { open = "{", close = "}", kind = "bracket" },
+  { open = "\"", close = "\"", kind = "quote" },
+  { open = "'", close = "'", kind = "quote" },
+  { open = "'''", close = "'''", kind = "quote" },
+  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
+]
+
+[[language]]
+name = "jinja"
+auto-pairs = [
+  { open = "(", close = ")", kind = "bracket" },
+  { open = "{", close = "}", kind = "bracket" },
+  { open = "{%", close = "%}", kind = "delimiter" },
+  { open = "{{", close = "}}", kind = "delimiter" },
+  { open = "{#", close = "#}", kind = "delimiter" },
+]
+
+[[language]]
+name = "markdown"
+auto-pairs = [
+  { open = "(", close = ")", kind = "bracket" },
+  { open = "[", close = "]", kind = "bracket" },
+  { open = "`", close = "`", kind = "quote" },
+  { open = "```", close = "```", kind = "delimiter" },
+]
+```
+
+Each pair object supports the following fields:
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `open` | The opening string (required) | - |
+| `close` | The closing string (required) | - |
+| `kind` | Classification: `bracket`, `quote`, `delimiter`, or `custom` | Auto-detected |
+| `allowed-contexts` | Array of contexts where pairing is active: `code`, `string`, `comment`, `regex`, or `all` | `["code"]` |
+| `surround` | Whether this pair participates in surround commands | `true` |
+
+The `allowed-contexts` field uses tree-sitter to detect the syntactic context
+at the cursor position, allowing context-aware auto-pairing (e.g., disabling
+bracket pairing inside strings or comments).
 
 ### `[editor.auto-save]` Section
 
