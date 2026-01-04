@@ -280,6 +280,283 @@ fn find_nth_close_pair(
     Some(pos)
 }
 
+/// Find the position of surround pairs using multi-character open/close strings.
+///
+/// Similar to `find_nth_pairs_pos` but works with string patterns instead of single chars.
+/// Returns the starting positions of the open and close strings.
+pub fn find_nth_pairs_pos_multi(
+    text: RopeSlice,
+    open: &str,
+    close: &str,
+    range: Range,
+    n: usize,
+) -> Result<(usize, usize)> {
+    if text.len_chars() < open.len() + close.len() {
+        return Err(Error::PairNotFound);
+    }
+    if range.to() >= text.len_chars() {
+        return Err(Error::RangeExceedsText);
+    }
+
+    let pos = range.cursor(text);
+
+    let (open_pos, close_pos) = if open == close {
+        // Symmetric pair (like ```)
+        (
+            find_nth_prev_str(text, open, pos, n),
+            find_nth_next_str(text, close, pos, n),
+        )
+    } else {
+        // Asymmetric pair (like {% %})
+        (
+            find_nth_open_pair_multi(text, open, close, pos, n),
+            find_nth_close_pair_multi(text, open, close, pos, n),
+        )
+    };
+
+    match range.direction() {
+        Direction::Forward => Option::zip(open_pos, close_pos).ok_or(Error::PairNotFound),
+        Direction::Backward => Option::zip(close_pos, open_pos).ok_or(Error::PairNotFound),
+    }
+}
+
+/// Find nth occurrence of a string pattern searching backward from pos.
+fn find_nth_prev_str(text: RopeSlice, pattern: &str, pos: usize, n: usize) -> Option<usize> {
+    let pattern_len = pattern.chars().count();
+    if pattern_len == 0 || pos < pattern_len {
+        return None;
+    }
+
+    let mut found = 0;
+    let mut search_pos = pos.saturating_sub(pattern_len);
+
+    loop {
+        // Check if pattern matches at search_pos
+        let slice_end = (search_pos + pattern_len).min(text.len_chars());
+        let slice: String = text.slice(search_pos..slice_end).chars().collect();
+        if slice == pattern {
+            found += 1;
+            if found == n {
+                return Some(search_pos);
+            }
+        }
+
+        if search_pos == 0 {
+            break;
+        }
+        search_pos -= 1;
+    }
+
+    None
+}
+
+/// Find nth occurrence of a string pattern searching forward from pos.
+fn find_nth_next_str(text: RopeSlice, pattern: &str, pos: usize, n: usize) -> Option<usize> {
+    let pattern_len = pattern.chars().count();
+    if pattern_len == 0 {
+        return None;
+    }
+
+    let mut found = 0;
+    let mut search_pos = pos;
+
+    while search_pos + pattern_len <= text.len_chars() {
+        let slice: String = text.slice(search_pos..search_pos + pattern_len).chars().collect();
+        if slice == pattern {
+            found += 1;
+            if found == n {
+                return Some(search_pos);
+            }
+        }
+        search_pos += 1;
+    }
+
+    None
+}
+
+/// Find the nth opening pair position, handling nesting.
+fn find_nth_open_pair_multi(
+    text: RopeSlice,
+    open: &str,
+    close: &str,
+    pos: usize,
+    n: usize,
+) -> Option<usize> {
+    let open_len = open.chars().count();
+    let close_len = close.chars().count();
+
+    let mut found = 0;
+    let mut step_over: usize = 0;
+
+    // Check if we're starting on or within the open pattern
+    // For multi-char patterns, the cursor might be anywhere within the pattern
+    for offset in 0..open_len {
+        let start = pos.saturating_sub(offset);
+        if start + open_len <= text.len_chars() {
+            let slice: String = text
+                .slice(start..start + open_len)
+                .chars()
+                .collect();
+            if slice == open {
+                return Some(start);
+            }
+        }
+    }
+
+    // Check if we're on the close pattern - if so, start searching before it
+    let mut search_pos = pos;
+    for offset in 0..close_len {
+        let start = pos.saturating_sub(offset);
+        if start + close_len <= text.len_chars() {
+            let slice: String = text
+                .slice(start..start + close_len)
+                .chars()
+                .collect();
+            if slice == close {
+                // We're on the close pattern, start search before it
+                search_pos = start;
+                break;
+            }
+        }
+    }
+
+    while search_pos > 0 {
+        search_pos -= 1;
+
+        // Check for close pattern (increases nesting)
+        if search_pos + close_len <= text.len_chars() {
+            let slice: String = text
+                .slice(search_pos..search_pos + close_len)
+                .chars()
+                .collect();
+            if slice == close {
+                step_over += 1;
+                continue;
+            }
+        }
+
+        // Check for open pattern
+        if search_pos + open_len <= text.len_chars() {
+            let slice: String = text
+                .slice(search_pos..search_pos + open_len)
+                .chars()
+                .collect();
+            if slice == open {
+                if step_over == 0 {
+                    found += 1;
+                    if found == n {
+                        return Some(search_pos);
+                    }
+                } else {
+                    step_over -= 1;
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Find the nth closing pair position, handling nesting.
+fn find_nth_close_pair_multi(
+    text: RopeSlice,
+    open: &str,
+    close: &str,
+    pos: usize,
+    n: usize,
+) -> Option<usize> {
+    let open_len = open.chars().count();
+    let close_len = close.chars().count();
+
+    let mut found = 0;
+    let mut step_over: usize = 0;
+    let mut search_pos = pos;
+
+    // Check if we're starting on or within the close pattern
+    // For multi-char patterns, the cursor might be anywhere within the pattern
+    for offset in 0..close_len {
+        let start = pos.saturating_sub(offset);
+        if start + close_len <= text.len_chars() {
+            let slice: String = text
+                .slice(start..start + close_len)
+                .chars()
+                .collect();
+            if slice == close {
+                return Some(start);
+            }
+        }
+    }
+
+    while search_pos + 1 < text.len_chars() {
+        search_pos += 1;
+
+        // Check for open pattern (increases nesting)
+        if search_pos + open_len <= text.len_chars() {
+            let slice: String = text
+                .slice(search_pos..search_pos + open_len)
+                .chars()
+                .collect();
+            if slice == open {
+                step_over += 1;
+                continue;
+            }
+        }
+
+        // Check for close pattern
+        if search_pos + close_len <= text.len_chars() {
+            let slice: String = text
+                .slice(search_pos..search_pos + close_len)
+                .chars()
+                .collect();
+            if slice == close {
+                if step_over == 0 {
+                    found += 1;
+                    if found == n {
+                        return Some(search_pos);
+                    }
+                } else {
+                    step_over -= 1;
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Find position of surround characters around every cursor for multi-char pairs.
+///
+/// Returns a Vec of (position, length) tuples for deletion/replacement.
+/// The Vec contains pairs: [(open_pos, open_len), (close_pos, close_len), ...]
+pub fn get_surround_pos_multi(
+    text: RopeSlice,
+    selection: &Selection,
+    open: &str,
+    close: &str,
+    skip: usize,
+) -> Result<Vec<(usize, usize)>> {
+    let open_len = open.chars().count();
+    let close_len = close.chars().count();
+    let mut change_pos = Vec::new();
+
+    for &range in selection {
+        let (open_pos, close_pos) = find_nth_pairs_pos_multi(text, open, close, range, skip)?;
+        let (open_pos, close_pos) = (open_pos.min(close_pos), open_pos.max(close_pos));
+
+        // Check for overlaps
+        for &(pos, _) in &change_pos {
+            if pos == open_pos || pos == close_pos {
+                return Err(Error::CursorOverlap);
+            }
+        }
+
+        change_pos.push((open_pos, open_len));
+        change_pos.push((close_pos, close_len));
+    }
+
+    Ok(change_pos)
+}
+
 /// Find position of surround characters around every cursor. Returns None
 /// if any positions overlap. Note that the positions are in a flat Vec.
 /// Use get_surround_pos().chunks(2) to get matching pairs of surround positions.
@@ -466,5 +743,135 @@ mod test {
         let expectations: Vec<usize> = spec.match_indices('_').map(|(i, _)| i).collect();
 
         (rope, Selection::new(selections, 0), expectations)
+    }
+
+    #[test]
+    fn test_find_nth_pairs_pos_multi_simple() {
+        let doc = Rope::from("{% hello %}");
+        let range = Range::point(5); // cursor on 'e'
+
+        let result = find_nth_pairs_pos_multi(doc.slice(..), "{%", "%}", range, 1);
+        assert!(result.is_ok());
+        let (open_pos, close_pos) = result.unwrap();
+        assert_eq!(open_pos, 0); // {% starts at 0
+        assert_eq!(close_pos, 9); // %} starts at 9
+    }
+
+    #[test]
+    fn test_find_nth_pairs_pos_multi_nested() {
+        // "{% outer {% inner %} outer %}"
+        //  0         1         2
+        //  0123456789012345678901234567890
+        // Inner {% at 9, inner %} at 18
+        // Outer {% at 0, outer %} at 27
+        let doc = Rope::from("{% outer {% inner %} outer %}");
+        let range = Range::point(14); // cursor on 'n' in inner
+
+        // First pair should be inner
+        let result = find_nth_pairs_pos_multi(doc.slice(..), "{%", "%}", range, 1);
+        assert!(result.is_ok());
+        let (open_pos, close_pos) = result.unwrap();
+        assert_eq!(open_pos, 9); // inner {% starts at 9
+        assert_eq!(close_pos, 18); // inner %} starts at 18
+
+        // Second pair should be outer
+        let result = find_nth_pairs_pos_multi(doc.slice(..), "{%", "%}", range, 2);
+        assert!(result.is_ok());
+        let (open_pos, close_pos) = result.unwrap();
+        assert_eq!(open_pos, 0); // outer {% starts at 0
+        assert_eq!(close_pos, 27); // outer %} starts at 27
+    }
+
+    #[test]
+    fn test_find_nth_pairs_pos_multi_symmetric() {
+        let doc = Rope::from("```code block```");
+        let range = Range::point(6); // cursor on 'e'
+
+        let result = find_nth_pairs_pos_multi(doc.slice(..), "```", "```", range, 1);
+        assert!(result.is_ok());
+        let (open_pos, close_pos) = result.unwrap();
+        assert_eq!(open_pos, 0);
+        assert_eq!(close_pos, 13);
+    }
+
+    #[test]
+    fn test_find_nth_pairs_pos_multi_not_found() {
+        let doc = Rope::from("no pairs here");
+        let range = Range::point(5);
+
+        let result = find_nth_pairs_pos_multi(doc.slice(..), "{%", "%}", range, 1);
+        assert_eq!(result, Err(Error::PairNotFound));
+    }
+
+    #[test]
+    fn test_find_nth_pairs_pos_multi_cursor_at_end() {
+        // Cursor at end of content but within pairs
+        // Text: "{% hello %}" = 11 chars
+        // Position 9 is on "%", position 10 is on "}"
+        // %} starts at position 9
+        let doc = Rope::from("{% hello %}");
+        let range = Range::point(10); // Cursor on "}"
+
+        let result = find_nth_pairs_pos_multi(doc.slice(..), "{%", "%}", range, 1);
+        assert!(result.is_ok());
+        let (open_pos, close_pos) = result.unwrap();
+        assert_eq!(open_pos, 0);
+        assert_eq!(close_pos, 9);
+    }
+
+    #[test]
+    fn test_find_nth_pairs_pos_multi_cursor_past_end() {
+        // Cursor position equals text length (end of document)
+        let doc = Rope::from("{% hello %}");
+        let range = Range::point(11); // At end
+
+        let result = find_nth_pairs_pos_multi(doc.slice(..), "{%", "%}", range, 1);
+        // Cursor at len_chars() is at the very end - should return RangeExceedsText
+        // This matches the behavior of the single-char version
+        assert_eq!(result, Err(Error::RangeExceedsText));
+    }
+
+    #[test]
+    fn test_find_nth_pairs_pos_multi_html_comment() {
+        let doc = Rope::from("<!-- this is a comment -->");
+        let range = Range::point(10); // cursor on 'i'
+
+        let result = find_nth_pairs_pos_multi(doc.slice(..), "<!--", "-->", range, 1);
+        assert!(result.is_ok());
+        let (open_pos, close_pos) = result.unwrap();
+        assert_eq!(open_pos, 0);
+        assert_eq!(close_pos, 23);
+    }
+
+    #[test]
+    fn test_get_surround_pos_multi_single_cursor() {
+        let doc = Rope::from("{% hello %}");
+        let selection = Selection::single(5, 6); // cursor on 'e'
+
+        let result = get_surround_pos_multi(doc.slice(..), &selection, "{%", "%}", 1);
+        assert!(result.is_ok());
+        let positions = result.unwrap();
+        // Should return [(open_pos, open_len), (close_pos, close_len)]
+        assert_eq!(positions.len(), 2);
+        assert_eq!(positions[0], (0, 2)); // {% at 0, len 2
+        assert_eq!(positions[1], (9, 2)); // %} at 9, len 2
+    }
+
+    #[test]
+    fn test_get_surround_pos_multi_multiple_cursors() {
+        let doc = Rope::from("{% a %} {% b %}");
+        let selection = Selection::new(
+            smallvec::smallvec![Range::point(3), Range::point(11)],
+            0,
+        );
+
+        let result = get_surround_pos_multi(doc.slice(..), &selection, "{%", "%}", 1);
+        assert!(result.is_ok());
+        let positions = result.unwrap();
+        assert_eq!(positions.len(), 4);
+        assert_eq!(positions[0], (0, 2)); // first {% at 0
+        assert_eq!(positions[1], (5, 2)); // first %} at 5
+        assert_eq!(positions[2], (8, 2)); // second {% at 8
+        assert_eq!(positions[3], (13, 2)); // second %} at 13
     }
 }

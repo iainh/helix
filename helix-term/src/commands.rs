@@ -6161,24 +6161,33 @@ static SURROUND_HELP_TEXT: [(&str, &str); 6] = [
 fn surround_add(cx: &mut Context) {
     cx.on_next_key(move |cx, event| {
         cx.editor.autoinfo = None;
-        let (view, doc) = current!(cx.editor);
-        // surround_len is the number of new characters being added.
+        // Get the surround pair strings before borrowing doc mutably
         let (open, close, surround_len) = match event.char() {
             Some(ch) => {
-                let (o, c) = match_brackets::get_pair(ch);
-                let mut open = Tendril::new();
-                open.push(o);
-                let mut close = Tendril::new();
-                close.push(c);
-                (open, close, 2)
+                let loader = cx.editor.syn_loader.load();
+                let (view, doc) = current_ref!(cx.editor);
+                let (o, c) = doc
+                    .bracket_set(cx.editor, &loader, view)
+                    .map(|bs| bs.get_surround_strings(ch))
+                    .unwrap_or_else(|| {
+                        let (o, c) = match_brackets::get_pair(ch);
+                        (o.to_string(), c.to_string())
+                    });
+                let surround_len = o.chars().count() + c.chars().count();
+                (Tendril::from(o), Tendril::from(c), surround_len)
             }
-            None if event.code == KeyCode::Enter => (
-                doc.line_ending.as_str().into(),
-                doc.line_ending.as_str().into(),
-                2 * doc.line_ending.len_chars(),
-            ),
+            None if event.code == KeyCode::Enter => {
+                let (_, doc) = current_ref!(cx.editor);
+                let line_ending = doc.line_ending;
+                (
+                    line_ending.as_str().into(),
+                    line_ending.as_str().into(),
+                    2 * line_ending.len_chars(),
+                )
+            }
             None => return,
         };
+        let (view, doc) = current!(cx.editor);
 
         let selection = doc.selection(view.id);
         let mut changes = Vec::with_capacity(selection.len() * 2);
@@ -6218,21 +6227,50 @@ fn surround_replace(cx: &mut Context) {
             Some(ch) => Some(ch),
             None => return,
         };
+
+        // Try multi-char pairs first if we have a BracketSet
+        let loader = cx.editor.syn_loader.load();
+        let multi_char_result = surround_ch.and_then(|ch| {
+            let (view, doc) = current_ref!(cx.editor);
+            let bracket_set = doc.bracket_set(cx.editor, &loader, view)?;
+
+            // Check if this char maps to a multi-char pair
+            let pair = bracket_set
+                .surround_pairs()
+                .find(|p| {
+                    let open_first = p.open.chars().next();
+                    let close_first = p.close.chars().next();
+                    (open_first == Some(ch) || close_first == Some(ch))
+                        && (p.open.chars().count() > 1 || p.close.chars().count() > 1)
+                })?;
+
+            let text = doc.text().slice(..);
+            let selection = doc.selection(view.id);
+            surround::get_surround_pos_multi(text, selection, &pair.open, &pair.close, count).ok()
+        });
+
         let (view, doc) = current!(cx.editor);
         let text = doc.text().slice(..);
         let selection = doc.selection(view.id);
 
-        let change_pos =
+        // change_pos_with_len: Vec<(pos, len)> for multi-char, or Vec<(pos, 1)> for single-char
+        let change_pos_with_len: Vec<(usize, usize)> = if let Some(positions) = multi_char_result {
+            positions
+        } else {
             match surround::get_surround_pos(doc.syntax(), text, selection, surround_ch, count) {
-                Ok(c) => c,
+                Ok(c) => c.into_iter().map(|p| (p, 1)).collect(),
                 Err(err) => {
                     cx.editor.set_error(err.to_string());
                     return;
                 }
-            };
+            }
+        };
 
         let selection = selection.clone();
-        let ranges: SmallVec<[Range; 1]> = change_pos.iter().map(|&p| Range::point(p)).collect();
+        let ranges: SmallVec<[Range; 1]> = change_pos_with_len
+            .iter()
+            .map(|&(p, _)| Range::point(p))
+            .collect();
         doc.set_selection(
             view.id,
             Selection::new(ranges, selection.primary_index() * 2),
@@ -6240,28 +6278,40 @@ fn surround_replace(cx: &mut Context) {
 
         cx.on_next_key(move |cx, event| {
             cx.editor.autoinfo = None;
-            let (view, doc) = current!(cx.editor);
             let to = match event.char() {
                 Some(to) => to,
-                None => return doc.set_selection(view.id, selection),
+                None => {
+                    let (view, doc) = current!(cx.editor);
+                    return doc.set_selection(view.id, selection);
+                }
             };
-            let (open, close) = match_brackets::get_pair(to);
+            // Get the surround pair strings before borrowing doc mutably
+            let loader = cx.editor.syn_loader.load();
+            let (open, close) = {
+                let (view, doc) = current_ref!(cx.editor);
+                doc.bracket_set(cx.editor, &loader, view)
+                    .map(|bs| bs.get_surround_strings(to))
+                    .unwrap_or_else(|| {
+                        let (o, c) = match_brackets::get_pair(to);
+                        (o.to_string(), c.to_string())
+                    })
+            };
 
             // the changeset has to be sorted to allow nested surrounds
-            let mut sorted_pos: Vec<(usize, char)> = Vec::new();
-            for p in change_pos.chunks(2) {
-                sorted_pos.push((p[0], open));
-                sorted_pos.push((p[1], close));
+            // Each pair of entries is (open_pos, open_len), (close_pos, close_len)
+            let mut sorted_pos: Vec<(usize, usize, Tendril)> = Vec::new();
+            for p in change_pos_with_len.chunks(2) {
+                sorted_pos.push((p[0].0, p[0].1, Tendril::from(open.as_str())));
+                sorted_pos.push((p[1].0, p[1].1, Tendril::from(close.as_str())));
             }
-            sorted_pos.sort_unstable();
+            sorted_pos.sort_unstable_by_key(|(pos, _, _)| *pos);
 
+            let (view, doc) = current!(cx.editor);
             let transaction = Transaction::change(
                 doc.text(),
-                sorted_pos.iter().map(|&pos| {
-                    let mut t = Tendril::new();
-                    t.push(pos.1);
-                    (pos.0, pos.0 + 1, Some(t))
-                }),
+                sorted_pos
+                    .into_iter()
+                    .map(|(pos, len, t)| (pos, pos + len, Some(t))),
             );
             doc.set_selection(view.id, selection);
             doc.apply(&transaction, view.id);
@@ -6289,22 +6339,56 @@ fn surround_delete(cx: &mut Context) {
             Some(ch) => Some(ch),
             None => return,
         };
+
+        // Try multi-char pairs first if we have a BracketSet
+        let loader = cx.editor.syn_loader.load();
+        let multi_char_result = surround_ch.and_then(|ch| {
+            let (view, doc) = current_ref!(cx.editor);
+            let bracket_set = doc.bracket_set(cx.editor, &loader, view)?;
+
+            // Check if this char maps to a multi-char pair
+            let pair = bracket_set
+                .surround_pairs()
+                .find(|p| {
+                    let open_first = p.open.chars().next();
+                    let close_first = p.close.chars().next();
+                    (open_first == Some(ch) || close_first == Some(ch))
+                        && (p.open.chars().count() > 1 || p.close.chars().count() > 1)
+                })?;
+
+            let text = doc.text().slice(..);
+            let selection = doc.selection(view.id);
+            surround::get_surround_pos_multi(text, selection, &pair.open, &pair.close, count).ok()
+        });
+
         let (view, doc) = current!(cx.editor);
         let text = doc.text().slice(..);
         let selection = doc.selection(view.id);
 
-        let mut change_pos =
-            match surround::get_surround_pos(doc.syntax(), text, selection, surround_ch, count) {
-                Ok(c) => c,
-                Err(err) => {
-                    cx.editor.set_error(err.to_string());
-                    return;
-                }
-            };
-        change_pos.sort_unstable(); // the changeset has to be sorted to allow nested surrounds
-        let transaction =
-            Transaction::change(doc.text(), change_pos.into_iter().map(|p| (p, p + 1, None)));
-        doc.apply(&transaction, view.id);
+        if let Some(mut positions) = multi_char_result {
+            // Multi-char deletion: positions are (pos, len) tuples
+            positions.sort_unstable_by_key(|(pos, _)| *pos);
+            let transaction = Transaction::change(
+                doc.text(),
+                positions.into_iter().map(|(pos, len)| (pos, pos + len, None)),
+            );
+            doc.apply(&transaction, view.id);
+        } else {
+            // Fall back to single-char deletion
+            let mut change_pos =
+                match surround::get_surround_pos(doc.syntax(), text, selection, surround_ch, count)
+                {
+                    Ok(c) => c,
+                    Err(err) => {
+                        cx.editor.set_error(err.to_string());
+                        return;
+                    }
+                };
+            change_pos.sort_unstable();
+            let transaction =
+                Transaction::change(doc.text(), change_pos.into_iter().map(|p| (p, p + 1, None)));
+            doc.apply(&transaction, view.id);
+        }
         exit_select_mode(cx);
     });
 

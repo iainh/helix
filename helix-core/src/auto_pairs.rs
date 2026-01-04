@@ -27,10 +27,6 @@ pub const DEFAULT_MULTI_CHAR_PAIRS: &[(&str, &str)] = &[
     ("`", "`"),
 ];
 
-// ============================================================================
-// New Multi-Character Auto-Pairs Types
-// ============================================================================
-
 bitflags! {
     /// Context mask for where auto-pairing is allowed.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -295,6 +291,39 @@ impl BracketSet {
         self.pairs.iter().filter(|p| p.surround)
     }
 
+    /// Look up a surround pair by a single character.
+    ///
+    /// Searches surround-enabled pairs for one where the character matches
+    /// either the first character of open or close. Returns the (open, close)
+    /// strings if found.
+    ///
+    /// Prefers single-char pairs over multi-char pairs when the char matches
+    /// the first character of multiple pairs.
+    pub fn get_pair_by_char(&self, ch: char) -> Option<(&str, &str)> {
+        self.surround_pairs()
+            .filter(|p| {
+                let open_first = p.open.chars().next();
+                let close_first = p.close.chars().next();
+                open_first == Some(ch) || close_first == Some(ch)
+            })
+            .min_by_key(|p| p.open.len())
+            .map(|p| (p.open.as_str(), p.close.as_str()))
+    }
+
+    /// Get surround strings for a character, with fallback.
+    ///
+    /// If the character matches a known surround pair, returns (open, close).
+    /// Otherwise, returns the character as both open and close (symmetric pair).
+    ///
+    /// This mirrors the behavior of `match_brackets::get_pair()` but works
+    /// with the `BracketSet` configuration.
+    pub fn get_surround_strings(&self, ch: char) -> (String, String) {
+        match self.get_pair_by_char(ch) {
+            Some((open, close)) => (open.to_string(), close.to_string()),
+            None => (ch.to_string(), ch.to_string()),
+        }
+    }
+
     /// Get the maximum trigger length.
     pub fn max_trigger_len(&self) -> usize {
         self.max_trigger_len
@@ -509,10 +538,6 @@ pub fn detect_pair_for_deletion(doc: &Rope, cursor: usize, set: &BracketSet) -> 
     best_match
 }
 
-// ============================================================================
-// Legacy Single-Character Auto-Pairs (Backward Compatibility)
-// ============================================================================
-
 /// The type that represents the collection of auto pairs,
 /// keyed by both opener and closer.
 #[derive(Debug, Clone)]
@@ -633,10 +658,6 @@ pub fn hook(doc: &Rope, selection: &Selection, ch: char, pairs: &AutoPairs) -> O
 
     None
 }
-
-// ============================================================================
-// AutoPairState and Context-Aware Hook
-// ============================================================================
 
 /// State passed to the auto-pairs hook for context-aware pairing.
 ///
@@ -846,10 +867,6 @@ pub fn hook_with_syntax(
     hook_with_context(&state, ch)
 }
 
-// ============================================================================
-// New Multi-Character Hook (Without Context)
-// ============================================================================
-
 /// Hook for multi-character auto-pairs.
 ///
 /// This is the new entry point that supports multi-character pairs like ```,
@@ -954,10 +971,6 @@ pub fn hook_multi(
         None
     }
 }
-
-// ============================================================================
-// Internal Helpers
-// ============================================================================
 
 fn prev_char(doc: &Rope, pos: usize) -> Option<char> {
     if pos == 0 {
@@ -1193,10 +1206,6 @@ fn handle_same(doc: &Rope, selection: &Selection, pair: &Pair) -> Transaction {
     log::debug!("auto pair transaction: {:#?}", t);
     t
 }
-
-// ============================================================================
-// Unit Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -1766,5 +1775,113 @@ mod tests {
         // After first insert at pos 4: "code() \"str\" code\n" (inserted 2 chars)
         // After second insert at pos 7+2=9: "code() \"s(tr\" code\n" (inserted 1 char)
         assert_eq!(new_doc.to_string(), "code() \"s(tr\" code\n");
+    }
+
+    #[test]
+    fn test_surround_pairs_iterator() {
+        let pairs = vec![
+            BracketPair::new("(", ")").with_surround(true),
+            BracketPair::new("{%", "%}").with_surround(false),
+            BracketPair::new("[", "]").with_surround(true),
+        ];
+        let set = BracketSet::new(pairs);
+
+        let surround: Vec<_> = set.surround_pairs().collect();
+        assert_eq!(surround.len(), 2);
+        assert_eq!(surround[0].open, "(");
+        assert_eq!(surround[1].open, "[");
+    }
+
+    #[test]
+    fn test_get_pair_by_char_open() {
+        let set = BracketSet::from_default_pairs();
+
+        // Look up by open char
+        let result = set.get_pair_by_char('(');
+        assert!(result.is_some());
+        let (open, close) = result.unwrap();
+        assert_eq!(open, "(");
+        assert_eq!(close, ")");
+    }
+
+    #[test]
+    fn test_get_pair_by_char_close() {
+        let set = BracketSet::from_default_pairs();
+
+        // Look up by close char
+        let result = set.get_pair_by_char(')');
+        assert!(result.is_some());
+        let (open, close) = result.unwrap();
+        assert_eq!(open, "(");
+        assert_eq!(close, ")");
+    }
+
+    #[test]
+    fn test_get_pair_by_char_symmetric() {
+        let set = BracketSet::from_default_pairs();
+
+        // Symmetric pairs (quotes)
+        let result = set.get_pair_by_char('"');
+        assert!(result.is_some());
+        let (open, close) = result.unwrap();
+        assert_eq!(open, "\"");
+        assert_eq!(close, "\"");
+    }
+
+    #[test]
+    fn test_get_pair_by_char_not_found() {
+        let set = BracketSet::from_default_pairs();
+
+        // Character not in any pair
+        let result = set.get_pair_by_char('x');
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_pair_by_char_only_surround_pairs() {
+        let pairs = vec![
+            BracketPair::new("(", ")").with_surround(true),
+            BracketPair::new("{%", "%}").with_surround(false),
+        ];
+        let set = BracketSet::new(pairs);
+
+        // ( is a surround pair
+        let result = set.get_pair_by_char('(');
+        assert!(result.is_some());
+
+        // { starts the non-surround pair, should not be found
+        let result = set.get_pair_by_char('{');
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_pair_by_char_multi_char() {
+        let pairs = vec![
+            BracketPair::new("{", "}").with_surround(true),
+            BracketPair::new("{%", "%}").with_surround(true),
+        ];
+        let set = BracketSet::new(pairs);
+
+        // { should match single-char pair
+        let result = set.get_pair_by_char('{');
+        assert!(result.is_some());
+        let (open, close) = result.unwrap();
+        assert_eq!(open, "{");
+        assert_eq!(close, "}");
+    }
+
+    #[test]
+    fn test_get_surround_strings_fallback() {
+        let set = BracketSet::from_default_pairs();
+
+        // Known pair
+        let (open, close) = set.get_surround_strings('(');
+        assert_eq!(open, "(");
+        assert_eq!(close, ")");
+
+        // Unknown char - falls back to same char
+        let (open, close) = set.get_surround_strings('x');
+        assert_eq!(open, "x");
+        assert_eq!(close, "x");
     }
 }

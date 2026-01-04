@@ -1353,10 +1353,6 @@ mod test {
         );
     }
 
-    // =========================================================================
-    // Integration tests: Full context-aware auto-pairing with tree-sitter
-    // =========================================================================
-
     #[test]
     fn test_auto_pairs_with_context_rust_code_vs_string() {
         use crate::auto_pairs::{
