@@ -281,7 +281,9 @@ pairs = [
   { open = "{", close = "}" },
   { open = "[", close = "]" },
   { open = "\"", close = "\"", kind = "quote" },
+  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
   { open = "'", close = "'", kind = "quote" },
+  { open = "'''", close = "'''", kind = "quote" },
 ]
 
 [ruby]
@@ -441,6 +443,7 @@ pairs = [
   { open = "{", close = "}" },
   { open = "[", close = "]" },
   { open = "\"", close = "\"", kind = "quote" },
+  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
   { open = "'", close = "'", kind = "quote" },
   { open = "<", close = ">" },
 ]
@@ -451,6 +454,7 @@ pairs = [
   { open = "{", close = "}" },
   { open = "[", close = "]" },
   { open = "\"", close = "\"", kind = "quote" },
+  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
   { open = "'", close = "'", kind = "quote" },
   { open = "<", close = ">" },
   { open = "${", close = "}", kind = "delimiter" },
@@ -462,6 +466,7 @@ pairs = [
   { open = "{", close = "}" },
   { open = "[", close = "]" },
   { open = "\"", close = "\"", kind = "quote" },
+  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
   { open = "'", close = "'", kind = "quote" },
 ]
 
@@ -471,7 +476,9 @@ pairs = [
   { open = "{", close = "}" },
   { open = "[", close = "]" },
   { open = "\"", close = "\"", kind = "quote" },
+  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
   { open = "'", close = "'", kind = "quote" },
+  { open = "'''", close = "'''", kind = "quote" },
   { open = "${", close = "}", kind = "delimiter" },
 ]
 
@@ -629,6 +636,7 @@ pairs = [
   { open = "{", close = "}" },
   { open = "[", close = "]" },
   { open = "\"", close = "\"", kind = "quote" },
+  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
   { open = "'", close = "'", kind = "quote" },
   { open = "<", close = ">" },
   { open = "\\(", close = ")", kind = "delimiter" },
@@ -661,6 +669,7 @@ pairs = [
   { open = "{", close = "}" },
   { open = "[", close = "]" },
   { open = "\"", close = "\"", kind = "quote" },
+  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
   { open = "'", close = "'", kind = "quote" },
   { open = "$(", close = ")", kind = "delimiter" },
 ]

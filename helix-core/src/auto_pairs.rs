@@ -357,13 +357,18 @@ pub fn detect_trigger_at<'a>(
 
 /// When completing a multi-char trigger like `{%`, check if the prefix `{`
 /// was already auto-paired with `}` that now needs replacement.
+///
+/// This also handles symmetric pairs like `"` when upgrading to `"""`:
+/// - For `{%` trigger with `{` prefix pair: replaces `}` with `%}`
+/// - For `"""` trigger with `"` prefix pair: replaces `"` with `"""`
 fn find_prefix_close_to_replace(
     doc: &Rope,
     cursor: usize,
     matched_pair: &BracketPair,
     set: &BracketSet,
 ) -> Option<usize> {
-    if matched_pair.trigger.chars().count() <= 1 {
+    let trigger_len = matched_pair.trigger.chars().count();
+    if trigger_len <= 1 {
         return None;
     }
 
@@ -371,10 +376,10 @@ fn find_prefix_close_to_replace(
     let _ = chars.pop()?;
     let prefix_last_char = *chars.last()?;
 
+    // Find a prefix pair that could have been auto-paired before this longer trigger
     let prefix_pair = set.pairs().iter().find(|p| {
-        p.trigger.chars().count() == 1
-            && p.trigger.chars().next() == Some(prefix_last_char)
-            && !p.same()
+        let p_trigger_len = p.trigger.chars().count();
+        p_trigger_len < trigger_len && p.trigger.starts_with(prefix_last_char)
     })?;
 
     let close_first_char = prefix_pair.close.chars().next()?;
@@ -390,6 +395,60 @@ fn find_prefix_close_to_replace(
 /// Check if a pair should be active in the given context.
 pub fn context_allows_pair(context: BracketContext, pair: &BracketPair) -> bool {
     pair.allowed_contexts.intersects(context.to_mask())
+}
+
+/// Check if there's a longer trigger that could match if we type `ch` at `cursor`.
+///
+/// This is used to determine whether we should skip over a closing quote or
+/// continue building toward a longer trigger like `"""`.
+///
+/// Returns true if there exists a pair with a longer trigger that:
+/// 1. Ends with `ch`
+/// 2. Could match given the characters before cursor + `ch` + chars ahead
+fn has_longer_trigger_forming(
+    doc: &Rope,
+    cursor: usize,
+    ch: char,
+    current_pair: &BracketPair,
+    set: &BracketSet,
+) -> bool {
+    let current_trigger_len = current_pair.trigger.chars().count();
+
+    // Find pairs with longer triggers that end with `ch`
+    let longer_pairs: Vec<_> = set
+        .pairs()
+        .iter()
+        .filter(|p| {
+            p.trigger.chars().count() > current_trigger_len && p.trigger.ends_with(ch)
+        })
+        .collect();
+
+    if longer_pairs.is_empty() {
+        return false;
+    }
+
+    // Build the context: chars before cursor + ch
+    let start = cursor.saturating_sub(set.max_trigger_len().saturating_sub(1));
+    let slice = doc.slice(start..cursor);
+    let recent: String = slice.chars().chain(std::iter::once(ch)).collect();
+
+    // Check if any longer trigger is forming (could match in future keystrokes)
+    for pair in longer_pairs {
+        // Check if recent chars + ch form a prefix of the longer trigger
+        // For example: if we have `"` and longer trigger is `"""`,
+        // check if `"` + `"` (the ch we're typing) could lead to `"""`
+        let trigger = &pair.trigger;
+
+        // Check if recent ends with a prefix of the trigger
+        for prefix_len in 1..=trigger.chars().count() {
+            let prefix: String = trigger.chars().take(prefix_len).collect();
+            if recent.ends_with(&prefix) {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 /// Detect if a close sequence matches at the cursor position.
@@ -690,13 +749,39 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
             }
 
             let next_char = state.doc.get_char(cursor);
+            let building_longer_trigger =
+                has_longer_trigger_forming(state.doc, cursor, ch, pair, state.pairs);
 
-            // Skip over existing close for symmetric pairs (quotes)
+            // For symmetric pairs, check if we should skip over existing close
             if pair.same() && next_char == Some(ch) {
-                let next_range = get_next_range(state.doc, start_range, offs, 0);
-                end_ranges.push(next_range);
-                made_changes = true;
-                return (cursor, cursor, None);
+                // Check if the full close sequence is ahead (for multi-char pairs like """)
+                let close_len = pair.close.chars().count();
+                let full_close_ahead = if cursor + close_len <= state.doc.len_chars() {
+                    state.doc.slice(cursor..cursor + close_len) == pair.close
+                } else {
+                    false
+                };
+
+                if full_close_ahead && !building_longer_trigger {
+                    // Skip over the full closing sequence
+                    let next_range = get_next_range(state.doc, start_range, offs, 0);
+                    end_ranges.push(next_range);
+                    made_changes = true;
+                    return (cursor, cursor, None);
+                }
+
+                if building_longer_trigger {
+                    // We're building toward a longer trigger - insert single char without creating pair
+                    // This adds a quote, moving us closer to the longer trigger like """
+                    let mut t = Tendril::new();
+                    t.push(ch);
+                    let next_range = get_next_range(state.doc, start_range, offs, 1);
+                    end_ranges.push(next_range);
+                    offs += 1;
+                    made_changes = true;
+                    return (cursor, cursor, Some(t));
+                }
+                // Otherwise fall through to normal pairing logic
             }
 
             if pair.should_close(state.doc, start_range) {
@@ -717,9 +802,9 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
                     };
 
                 let chars_removed = delete_end - delete_start;
-                let net_inserted = len_inserted.saturating_sub(chars_removed);
 
-                let next_range = get_next_range(state.doc, start_range, offs, net_inserted);
+                // Cursor advances by 1 (the char completing the opener), not the full insertion
+                let next_range = get_next_range(state.doc, start_range, offs, 1);
                 end_ranges.push(next_range);
                 offs = offs + len_inserted - chars_removed;
                 made_changes = true;
@@ -808,13 +893,38 @@ pub fn hook_multi(
 
         if let Some(pair) = detect_trigger_at(doc, cursor, ch, pairs) {
             let next_char = doc.get_char(cursor);
+            let building_longer_trigger = has_longer_trigger_forming(doc, cursor, ch, pair, pairs);
 
-            // Skip over existing close for symmetric pairs (quotes)
+            // For symmetric pairs, check if we should skip over existing close
             if pair.same() && next_char == Some(ch) {
-                let next_range = get_next_range(doc, start_range, offs, 0);
-                end_ranges.push(next_range);
-                made_changes = true;
-                return (cursor, cursor, None);
+                // Check if the full close sequence is ahead (for multi-char pairs like """)
+                let close_len = pair.close.chars().count();
+                let full_close_ahead = if cursor + close_len <= doc.len_chars() {
+                    doc.slice(cursor..cursor + close_len) == pair.close
+                } else {
+                    false
+                };
+
+                if full_close_ahead && !building_longer_trigger {
+                    // Skip over the full closing sequence
+                    let next_range = get_next_range(doc, start_range, offs, 0);
+                    end_ranges.push(next_range);
+                    made_changes = true;
+                    return (cursor, cursor, None);
+                }
+
+                if building_longer_trigger {
+                    // We're building toward a longer trigger - insert single char without creating pair
+                    // This adds a quote, moving us closer to the longer trigger like """
+                    let mut t = Tendril::new();
+                    t.push(ch);
+                    let next_range = get_next_range(doc, start_range, offs, 1);
+                    end_ranges.push(next_range);
+                    offs += 1;
+                    made_changes = true;
+                    return (cursor, cursor, Some(t));
+                }
+                // Otherwise fall through to normal pairing logic
             }
 
             if pair.should_close(doc, start_range) {
@@ -834,9 +944,9 @@ pub fn hook_multi(
                     };
 
                 let chars_removed = delete_end - delete_start;
-                let net_inserted = len_inserted.saturating_sub(chars_removed);
 
-                let next_range = get_next_range(doc, start_range, offs, net_inserted);
+                // Cursor advances by 1 (the char completing the opener), not the full insertion
+                let next_range = get_next_range(doc, start_range, offs, 1);
                 end_ranges.push(next_range);
                 offs = offs + len_inserted - chars_removed;
                 made_changes = true;
@@ -1943,5 +2053,236 @@ mod tests {
         let (open, close) = set.get_surround_strings('x');
         assert_eq!(open, "x");
         assert_eq!(close, "x");
+    }
+
+    // ==========================================================================
+    // Triple-quote auto-pairs tests (TDD: these should fail initially)
+    // ==========================================================================
+
+    /// Test that typing the first " inserts ""
+    #[test]
+    fn test_triple_quote_first_quote_inserts_pair() {
+        // Document: "test " with cursor after space
+        // Type: "
+        // Expected: "test ""|" (cursor between quotes)
+        let doc = Rope::from("test \n");
+        let selection = Selection::single(5, 6);
+
+        let pairs = vec![
+            BracketPair::new("\"", "\"").with_kind(BracketKind::Quote),
+            BracketPair::new("\"\"\"", "\"\"\"").with_kind(BracketKind::Quote),
+        ];
+        let set = BracketSet::new(pairs);
+
+        let result = hook_multi(&doc, &selection, '"', &set);
+        assert!(result.is_some());
+
+        let transaction = result.unwrap();
+        let mut new_doc = doc.clone();
+        assert!(transaction.apply(&mut new_doc));
+
+        // First quote should just insert "" like normal
+        assert_eq!(new_doc.to_string(), "test \"\"\n");
+    }
+
+    /// Test that typing second " after first "" moves cursor or prepares for triple
+    #[test]
+    fn test_triple_quote_second_quote_behavior() {
+        // Document: "test ""|" - user has typed one quote, got pair
+        // Cursor is between the quotes at position 6
+        // Type: "
+        // Expected behavior: should prepare for potential triple quote
+        let doc = Rope::from("test \"\"\n");
+        let selection = Selection::single(6, 7); // cursor between the two quotes
+
+        let pairs = vec![
+            BracketPair::new("\"", "\"").with_kind(BracketKind::Quote),
+            BracketPair::new("\"\"\"", "\"\"\"").with_kind(BracketKind::Quote),
+        ];
+        let set = BracketSet::new(pairs);
+
+        let result = hook_multi(&doc, &selection, '"', &set);
+        assert!(result.is_some());
+
+        let transaction = result.unwrap();
+        let mut new_doc = doc.clone();
+        assert!(transaction.apply(&mut new_doc));
+
+        // After typing second quote, we should have """ with cursor positioned for third
+        // The exact behavior here depends on implementation - either skip or insert
+        // For now, we expect the document to allow building toward """
+        assert_eq!(new_doc.to_string(), "test \"\"\"\n");
+    }
+
+    /// Test that typing third " completes the triple-quote pair
+    #[test]
+    fn test_triple_quote_third_quote_completes_pair() {
+        // Document: "test """  - user has typed two quotes
+        // Type: " (third quote)
+        // Expected: "test """|"""" (cursor between triple quotes)
+        let doc = Rope::from("test \"\"\n");
+        let selection = Selection::single(7, 8); // cursor after the two quotes
+
+        let pairs = vec![
+            BracketPair::new("\"", "\"").with_kind(BracketKind::Quote),
+            BracketPair::new("\"\"\"", "\"\"\"").with_kind(BracketKind::Quote),
+        ];
+        let set = BracketSet::new(pairs);
+
+        let result = hook_multi(&doc, &selection, '"', &set);
+        assert!(result.is_some());
+
+        let transaction = result.unwrap();
+        let mut new_doc = doc.clone();
+        assert!(transaction.apply(&mut new_doc));
+
+        // Third quote should trigger triple-quote pair: """ + """
+        assert_eq!(new_doc.to_string(), "test \"\"\"\"\"\"\n");
+    }
+
+    /// Test upgrade from single to triple quote pair
+    /// When user types { which creates {}, then types % to upgrade to {%%}
+    /// Similarly, when user types " which creates "", then types "" more to get """"""
+    #[test]
+    fn test_triple_quote_upgrade_from_single_pair() {
+        // Scenario: User typed first " and got "" (cursor between)
+        // Now cursor is at position 6 (between the quotes in test ""|")
+        // They type " again - this is the second quote
+        // Then they type " again - this should recognize """ trigger and upgrade
+        //
+        // For this test, we simulate the state after typing first quote:
+        // Document: test "" with cursor at position 6
+        // We type two more quotes in sequence
+
+        // First state: "test ""|""
+        let doc = Rope::from("test \"\"\n");
+        let selection = Selection::single(6, 7); // between quotes
+
+        let pairs = vec![
+            BracketPair::new("\"", "\"").with_kind(BracketKind::Quote),
+            BracketPair::new("\"\"\"", "\"\"\"").with_kind(BracketKind::Quote),
+        ];
+        let set = BracketSet::new(pairs);
+
+        // Type second quote
+        let result = hook_multi(&doc, &selection, '"', &set);
+        assert!(result.is_some());
+        let transaction = result.unwrap();
+        let mut doc2 = doc.clone();
+        assert!(transaction.apply(&mut doc2));
+
+        // Get new selection from transaction
+        let selection2 = transaction.selection().unwrap();
+
+        // Type third quote
+        let result2 = hook_multi(&doc2, selection2, '"', &set);
+        assert!(result2.is_some());
+        let transaction2 = result2.unwrap();
+        let mut doc3 = doc2.clone();
+        assert!(transaction2.apply(&mut doc3));
+
+        // Final result should be """"""
+        assert_eq!(doc3.to_string(), "test \"\"\"\"\"\"\n");
+    }
+
+    /// Test that skip-over works correctly for triple quotes
+    #[test]
+    fn test_triple_quote_skip_over_close() {
+        // Document: test """|""" with cursor between triple quotes
+        // Type: " (should skip over first closing quote)
+        // This tests the skip behavior for multi-char symmetric pairs
+        let doc = Rope::from("test \"\"\"\"\"\"\n");
+        // Cursor at position 8 (after opening """, before closing """)
+        // Positions: t(0)e(1)s(2)t(3) (4)"(5)"(6)"(7)"(8)"(9)"(10)\n(11)
+        let selection = Selection::single(8, 9);
+
+        let pairs = vec![
+            BracketPair::new("\"", "\"").with_kind(BracketKind::Quote),
+            BracketPair::new("\"\"\"", "\"\"\"").with_kind(BracketKind::Quote),
+        ];
+        let set = BracketSet::new(pairs);
+
+        let result = hook_multi(&doc, &selection, '"', &set);
+        assert!(result.is_some());
+
+        let transaction = result.unwrap();
+        let mut new_doc = doc.clone();
+        assert!(transaction.apply(&mut new_doc));
+
+        // Document should be unchanged (cursor just moves)
+        assert_eq!(new_doc.to_string(), "test \"\"\"\"\"\"\n");
+    }
+
+    /// Test symmetric pair upgrade for $$ (LaTeX math mode)
+    #[test]
+    fn test_double_dollar_upgrade() {
+        // Similar to triple quotes: $ → $$ should work with both $ and $$ pairs
+        let doc = Rope::from("test $\n");
+        let selection = Selection::single(6, 7); // after the $
+
+        let pairs = vec![
+            BracketPair::new("$", "$").with_kind(BracketKind::Quote),
+            BracketPair::new("$$", "$$").with_kind(BracketKind::Quote),
+        ];
+        let set = BracketSet::new(pairs);
+
+        // Type second $
+        let result = hook_multi(&doc, &selection, '$', &set);
+        assert!(result.is_some());
+
+        let transaction = result.unwrap();
+        let mut new_doc = doc.clone();
+        assert!(transaction.apply(&mut new_doc));
+
+        // Should get $$$$ (display math delimiters)
+        assert_eq!(new_doc.to_string(), "test $$$$\n");
+    }
+
+    /// Test that detect_trigger_at correctly identifies triple quote trigger
+    #[test]
+    fn test_detect_trigger_triple_quote() {
+        // Document has "" and we're typing third "
+        let doc = Rope::from("test \"\"");
+        let pairs = vec![
+            BracketPair::new("\"", "\"").with_kind(BracketKind::Quote),
+            BracketPair::new("\"\"\"", "\"\"\"").with_kind(BracketKind::Quote),
+        ];
+        let set = BracketSet::new(pairs);
+
+        // Typing " at position 7 (after "")
+        let result = detect_trigger_at(&doc, 7, '"', &set);
+        assert!(result.is_some());
+        // Should match triple quote (longest match)
+        assert_eq!(result.unwrap().open, "\"\"\"");
+    }
+
+    /// Test find_prefix_close_to_replace works for symmetric pairs
+    #[test]
+    fn test_find_prefix_close_for_symmetric_pairs() {
+        // When we have "" and are upgrading to """, we need to find and replace
+        // the closing " from the single-quote pair
+        //
+        // Document: test "" with cursor at 6 (between quotes)
+        // We're matching """ trigger, so we need to find the " to replace
+        let doc = Rope::from("test \"\"\n");
+        let cursor = 6; // between the quotes
+
+        let pairs = vec![
+            BracketPair::new("\"", "\"").with_kind(BracketKind::Quote),
+            BracketPair::new("\"\"\"", "\"\"\"").with_kind(BracketKind::Quote),
+        ];
+        let triple_pair = pairs[1].clone();
+        let set = BracketSet::new(pairs);
+
+        let result = find_prefix_close_to_replace(&doc, cursor, &triple_pair, &set);
+
+        // Currently this returns None because find_prefix_close_to_replace
+        // only handles non-symmetric pairs. After implementation, it should
+        // return Some(6) to indicate the " at position 6 should be replaced.
+        // For now, this test documents expected behavior.
+        assert!(
+            result.is_some(),
+            "Should find prefix close for symmetric pair upgrade"
+        );
     }
 }
