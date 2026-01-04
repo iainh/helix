@@ -610,7 +610,10 @@ impl BracketPairConfig {
 
 impl From<BracketPairConfig> for BracketPair {
     fn from(config: BracketPairConfig) -> Self {
-        let trigger = config.trigger.clone().unwrap_or_else(|| config.open.clone());
+        let trigger = config
+            .trigger
+            .clone()
+            .unwrap_or_else(|| config.open.clone());
         BracketPair {
             trigger,
             open: config.open.clone(),
@@ -768,13 +771,6 @@ where
     D: serde::Deserializer<'de>,
 {
     Option::<AutoPairConfig>::deserialize(deserializer)
-}
-
-pub fn deserialize_bracket_set<'de, D>(deserializer: D) -> Result<Option<BracketSet>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<AutoPairConfig>::deserialize(deserializer)?.and_then(AutoPairConfig::into))
 }
 
 fn default_timeout() -> u64 {
@@ -967,18 +963,18 @@ close = "%}"
 "#;
 
         let config: LanguageConfiguration = toml::from_str(toml_str).unwrap();
-        
+
         // auto_pair_config should be populated from the advanced config
         assert!(
             config.auto_pair_config.is_some(),
             "auto_pair_config should be Some"
         );
-        
+
         // auto_pairs and bracket_set are populated by Loader::new, not during parsing
         // So here they should be None
         assert!(config.auto_pairs.is_none());
         assert!(config.bracket_set.is_none());
-        
+
         // Verify the AutoPairConfig is correct
         if let Some(AutoPairConfig::Advanced(pairs)) = config.auto_pair_config {
             assert_eq!(pairs.len(), 2);

@@ -6235,14 +6235,12 @@ fn surround_replace(cx: &mut Context) {
             let bracket_set = doc.bracket_set(cx.editor, &loader, view)?;
 
             // Check if this char maps to a multi-char pair
-            let pair = bracket_set
-                .surround_pairs()
-                .find(|p| {
-                    let open_first = p.open.chars().next();
-                    let close_first = p.close.chars().next();
-                    (open_first == Some(ch) || close_first == Some(ch))
-                        && (p.open.chars().count() > 1 || p.close.chars().count() > 1)
-                })?;
+            let pair = bracket_set.surround_pairs().find(|p| {
+                let open_first = p.open.chars().next();
+                let close_first = p.close.chars().next();
+                (open_first == Some(ch) || close_first == Some(ch))
+                    && (p.open.chars().count() > 1 || p.close.chars().count() > 1)
+            })?;
 
             let text = doc.text().slice(..);
             let selection = doc.selection(view.id);
@@ -6347,14 +6345,12 @@ fn surround_delete(cx: &mut Context) {
             let bracket_set = doc.bracket_set(cx.editor, &loader, view)?;
 
             // Check if this char maps to a multi-char pair
-            let pair = bracket_set
-                .surround_pairs()
-                .find(|p| {
-                    let open_first = p.open.chars().next();
-                    let close_first = p.close.chars().next();
-                    (open_first == Some(ch) || close_first == Some(ch))
-                        && (p.open.chars().count() > 1 || p.close.chars().count() > 1)
-                })?;
+            let pair = bracket_set.surround_pairs().find(|p| {
+                let open_first = p.open.chars().next();
+                let close_first = p.close.chars().next();
+                (open_first == Some(ch) || close_first == Some(ch))
+                    && (p.open.chars().count() > 1 || p.close.chars().count() > 1)
+            })?;
 
             let text = doc.text().slice(..);
             let selection = doc.selection(view.id);
@@ -6370,7 +6366,9 @@ fn surround_delete(cx: &mut Context) {
             positions.sort_unstable_by_key(|(pos, _)| *pos);
             let transaction = Transaction::change(
                 doc.text(),
-                positions.into_iter().map(|(pos, len)| (pos, pos + len, None)),
+                positions
+                    .into_iter()
+                    .map(|(pos, len)| (pos, pos + len, None)),
             );
             doc.apply(&transaction, view.id);
         } else {

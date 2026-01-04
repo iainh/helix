@@ -17,16 +17,6 @@ pub const DEFAULT_PAIRS: &[(char, char)] = &[
     ('`', '`'),
 ];
 
-/// Default multi-character pairs for common languages.
-pub const DEFAULT_MULTI_CHAR_PAIRS: &[(&str, &str)] = &[
-    ("(", ")"),
-    ("{", "}"),
-    ("[", "]"),
-    ("'", "'"),
-    ("\"", "\""),
-    ("`", "`"),
-];
-
 bitflags! {
     /// Context mask for where auto-pairing is allowed.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -479,7 +469,11 @@ pub struct DeletePairResult {
 /// - `{%|%}` returns `DeletePairResult { delete_before: 2, delete_after: 2 }`
 ///
 /// Returns `None` if the cursor is not between a matched pair.
-pub fn detect_pair_for_deletion(doc: &Rope, cursor: usize, set: &BracketSet) -> Option<DeletePairResult> {
+pub fn detect_pair_for_deletion(
+    doc: &Rope,
+    cursor: usize,
+    set: &BracketSet,
+) -> Option<DeletePairResult> {
     if cursor == 0 {
         return None;
     }
@@ -524,12 +518,16 @@ pub fn detect_pair_for_deletion(doc: &Rope, cursor: usize, set: &BracketSet) -> 
 
 /// The type that represents the collection of auto pairs,
 /// keyed by both opener and closer.
-#[deprecated(note = "Use BracketSet instead, which supports multi-character pairs and context awareness")]
+#[deprecated(
+    note = "Use BracketSet instead, which supports multi-character pairs and context awareness"
+)]
 #[derive(Debug, Clone)]
 pub struct AutoPairs(HashMap<char, Pair>);
 
 /// Represents the config for a particular pairing.
-#[deprecated(note = "Use BracketPair instead, which supports multi-character pairs and context awareness")]
+#[deprecated(
+    note = "Use BracketPair instead, which supports multi-character pairs and context awareness"
+)]
 #[derive(Debug, Clone, Copy)]
 pub struct Pair {
     pub open: char,
@@ -722,7 +720,10 @@ impl<'a> AutoPairState<'a> {
 /// Returns `None` when no auto-pair action is needed (caller should insert normally).
 #[must_use]
 pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transaction> {
-    log::trace!("autopairs hook_with_context selection: {:#?}", state.selection);
+    log::trace!(
+        "autopairs hook_with_context selection: {:#?}",
+        state.selection
+    );
 
     let mut end_ranges = SmallVec::with_capacity(state.selection.len());
     let mut offs = 0;
@@ -730,7 +731,12 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
 
     let transaction = Transaction::change_by_selection(state.doc, state.selection, |start_range| {
         let cursor = start_range.cursor(state.doc.slice(..));
-        let range_idx = state.selection.ranges().iter().position(|r| r == start_range).unwrap_or(0);
+        let range_idx = state
+            .selection
+            .ranges()
+            .iter()
+            .position(|r| r == start_range)
+            .unwrap_or(0);
         let context = state.context_for_range(range_idx);
 
         // Try to detect a completed trigger (the char is about to be typed at cursor)
@@ -772,13 +778,13 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
                 let len_inserted = pair_str.chars().count();
 
                 // Calculate range changes accounting for removed close char
-                let (delete_start, delete_end) = if let Some(close_char_pos) = prefix_close_to_remove
-                {
-                    // Delete from cursor to after the old close char
-                    (cursor, close_char_pos + 1)
-                } else {
-                    (cursor, cursor)
-                };
+                let (delete_start, delete_end) =
+                    if let Some(close_char_pos) = prefix_close_to_remove {
+                        // Delete from cursor to after the old close char
+                        (cursor, close_char_pos + 1)
+                    } else {
+                        (cursor, cursor)
+                    };
 
                 let chars_removed = delete_end - delete_start;
                 let net_inserted = len_inserted.saturating_sub(chars_removed);
@@ -818,7 +824,9 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
     });
 
     if made_changes {
-        Some(transaction.with_selection(Selection::new(end_ranges, state.selection.primary_index())))
+        Some(
+            transaction.with_selection(Selection::new(end_ranges, state.selection.primary_index())),
+        )
     } else {
         None
     }
@@ -859,7 +867,9 @@ pub fn hook_with_syntax(
         .map(|range| {
             let cursor = range.cursor(doc.slice(..));
             match syntax {
-                Some(syn) => lang_data.bracket_context_at(syn.tree(), doc.slice(..), cursor, loader),
+                Some(syn) => {
+                    lang_data.bracket_context_at(syn.tree(), doc.slice(..), cursor, loader)
+                }
                 None => BracketContext::Code,
             }
         })
@@ -912,8 +922,7 @@ pub fn hook_multi(
                 // single-char close that we need to replace. For example, if the user
                 // types "{" and we inserted "{}", then they type "%" to complete "{%",
                 // we need to replace the "}" with "%}".
-                let prefix_close_to_remove =
-                    find_prefix_close_to_replace(doc, cursor, pair, pairs);
+                let prefix_close_to_remove = find_prefix_close_to_replace(doc, cursor, pair, pairs);
 
                 let mut pair_str = Tendril::new();
                 pair_str.push(ch);
@@ -922,13 +931,13 @@ pub fn hook_multi(
                 let len_inserted = pair_str.chars().count();
 
                 // Calculate range changes accounting for removed close char
-                let (delete_start, delete_end) = if let Some(close_char_pos) = prefix_close_to_remove
-                {
-                    // Delete from cursor to after the old close char
-                    (cursor, close_char_pos + 1)
-                } else {
-                    (cursor, cursor)
-                };
+                let (delete_start, delete_end) =
+                    if let Some(close_char_pos) = prefix_close_to_remove {
+                        // Delete from cursor to after the old close char
+                        (cursor, close_char_pos + 1)
+                    } else {
+                        (cursor, cursor)
+                    };
 
                 let chars_removed = delete_end - delete_start;
                 let net_inserted = len_inserted.saturating_sub(chars_removed);
@@ -1268,7 +1277,9 @@ impl AutoPairsRegistry {
 
         let pairs_arr = pairs_val
             .as_array()
-            .ok_or(AutoPairsRegistryError::InvalidFormat("'pairs' must be array"))?;
+            .ok_or(AutoPairsRegistryError::InvalidFormat(
+                "'pairs' must be array",
+            ))?;
 
         let mut pairs = Vec::with_capacity(pairs_arr.len());
 
@@ -1278,10 +1289,9 @@ impl AutoPairsRegistry {
                 .and_then(|v| v.as_str())
                 .ok_or(AutoPairsRegistryError::InvalidFormat("pair missing 'open'"))?;
 
-            let close = pair_val
-                .get("close")
-                .and_then(|v| v.as_str())
-                .ok_or(AutoPairsRegistryError::InvalidFormat("pair missing 'close'"))?;
+            let close = pair_val.get("close").and_then(|v| v.as_str()).ok_or(
+                AutoPairsRegistryError::InvalidFormat("pair missing 'close'"),
+            )?;
 
             let mut bracket_pair = BracketPair::new(open, close);
 
@@ -1456,17 +1466,30 @@ mod tests {
     #[test]
     fn test_bracket_context_allows_pair() {
         let bracket = BracketPair::new("(", ")").with_contexts(ContextMask::CODE);
-        let quote = BracketPair::new("\"", "\"").with_contexts(ContextMask::CODE | ContextMask::STRING);
+        let quote =
+            BracketPair::new("\"", "\"").with_contexts(ContextMask::CODE | ContextMask::STRING);
 
         // Bracket only allowed in code
-        assert!(bracket.allowed_contexts.intersects(BracketContext::Code.to_mask()));
-        assert!(!bracket.allowed_contexts.intersects(BracketContext::String.to_mask()));
-        assert!(!bracket.allowed_contexts.intersects(BracketContext::Comment.to_mask()));
+        assert!(bracket
+            .allowed_contexts
+            .intersects(BracketContext::Code.to_mask()));
+        assert!(!bracket
+            .allowed_contexts
+            .intersects(BracketContext::String.to_mask()));
+        assert!(!bracket
+            .allowed_contexts
+            .intersects(BracketContext::Comment.to_mask()));
 
         // Quote allowed in code and string
-        assert!(quote.allowed_contexts.intersects(BracketContext::Code.to_mask()));
-        assert!(quote.allowed_contexts.intersects(BracketContext::String.to_mask()));
-        assert!(!quote.allowed_contexts.intersects(BracketContext::Comment.to_mask()));
+        assert!(quote
+            .allowed_contexts
+            .intersects(BracketContext::Code.to_mask()));
+        assert!(quote
+            .allowed_contexts
+            .intersects(BracketContext::String.to_mask()));
+        assert!(!quote
+            .allowed_contexts
+            .intersects(BracketContext::Comment.to_mask()));
     }
 
     #[test]
@@ -1483,10 +1506,7 @@ mod tests {
     #[test]
     fn test_detect_trigger_multi_char() {
         let doc = Rope::from("test`");
-        let pairs = vec![
-            BracketPair::new("`", "`"),
-            BracketPair::new("```", "```"),
-        ];
+        let pairs = vec![BracketPair::new("`", "`"), BracketPair::new("```", "```")];
         let set = BracketSet::new(pairs);
 
         // After typing single backtick
@@ -1550,10 +1570,7 @@ mod tests {
         let doc = Rope::from("test``\n");
         let selection = Selection::single(6, 7); // cursor after `` (on the \n)
 
-        let pairs = vec![
-            BracketPair::new("`", "`"),
-            BracketPair::new("```", "```"),
-        ];
+        let pairs = vec![BracketPair::new("`", "`"), BracketPair::new("```", "```")];
         let set = BracketSet::new(pairs);
 
         let result = hook_multi(&doc, &selection, '`', &set);
@@ -1575,10 +1592,7 @@ mod tests {
         let doc = Rope::from("test{\n");
         let selection = Selection::single(5, 6); // cursor after { (on the \n)
 
-        let pairs = vec![
-            BracketPair::new("{", "}"),
-            BracketPair::new("{%", "%}"),
-        ];
+        let pairs = vec![BracketPair::new("{", "}"), BracketPair::new("{%", "%}")];
         let set = BracketSet::new(pairs);
 
         let result = hook_multi(&doc, &selection, '%', &set);
@@ -1665,7 +1679,7 @@ mod tests {
 
     #[test]
     fn test_detect_trigger_considers_position() {
-        // When cursor is at position 5 and we type %, 
+        // When cursor is at position 5 and we type %,
         // we need to look at chars before position 5
         let doc = Rope::from("test{");
         let set = BracketSet::new(vec![
@@ -1689,10 +1703,7 @@ mod tests {
         let doc = Rope::from("test{}\n");
         let selection = Selection::single(5, 6); // cursor between { and }
 
-        let pairs = vec![
-            BracketPair::new("{", "}"),
-            BracketPair::new("{%", "%}"),
-        ];
+        let pairs = vec![BracketPair::new("{", "}"), BracketPair::new("{%", "%}")];
         let set = BracketSet::new(pairs);
 
         let result = hook_multi(&doc, &selection, '%', &set);
@@ -1705,7 +1716,7 @@ mod tests {
         // The } should be replaced with %%}
         // Result: "test{" + "%" + "%}" + "\n" = "test{%%}\n"
         // Wait, that's wrong. Let me reconsider.
-        // 
+        //
         // Original: "test{}\n" with cursor at position 5 (between { and })
         // We type "%"
         // The transaction should:
@@ -1734,10 +1745,7 @@ mod tests {
         // Positions: t(0) e(1) s(2) t(3) {(4) %(5) %(6) }(7) \n(8)
         // Cursor at position 6 means we're between "{%" and "%}"
         let doc = Rope::from("test{%%}\n");
-        let pairs = vec![
-            BracketPair::new("{", "}"),
-            BracketPair::new("{%", "%}"),
-        ];
+        let pairs = vec![BracketPair::new("{", "}"), BracketPair::new("{%", "%}")];
         let set = BracketSet::new(pairs);
 
         // Cursor at position 6 (between {% and %})
@@ -1752,10 +1760,7 @@ mod tests {
     fn test_detect_pair_for_deletion_prefers_longer_match() {
         // When both { and {% could match, prefer the longer one
         let doc = Rope::from("{%%}\n");
-        let pairs = vec![
-            BracketPair::new("{", "}"),
-            BracketPair::new("{%", "%}"),
-        ];
+        let pairs = vec![BracketPair::new("{", "}"), BracketPair::new("{%", "%}")];
         let set = BracketSet::new(pairs);
 
         // Cursor at position 2 (between {% and %})
@@ -1802,8 +1807,8 @@ mod tests {
 
     #[test]
     fn test_context_allows_pair_multi_context() {
-        let pair = BracketPair::new("\"", "\"")
-            .with_contexts(ContextMask::CODE | ContextMask::STRING);
+        let pair =
+            BracketPair::new("\"", "\"").with_contexts(ContextMask::CODE | ContextMask::STRING);
 
         assert!(context_allows_pair(BracketContext::Code, &pair));
         assert!(context_allows_pair(BracketContext::String, &pair));
@@ -1857,7 +1862,7 @@ mod tests {
         let selection = Selection::single(4, 5);
         // Bracket only allowed in CODE context
         let pairs = BracketSet::new(vec![
-            BracketPair::new("(", ")").with_contexts(ContextMask::CODE),
+            BracketPair::new("(", ")").with_contexts(ContextMask::CODE)
         ]);
         // But we're in a STRING context
         let contexts = vec![BracketContext::String];
@@ -1879,11 +1884,9 @@ mod tests {
         let doc = Rope::from("test \n");
         let selection = Selection::single(5, 6);
         // Quote allowed in CODE and STRING contexts
-        let pairs = BracketSet::new(vec![
-            BracketPair::new("'", "'")
-                .with_kind(BracketKind::Quote)
-                .with_contexts(ContextMask::CODE | ContextMask::STRING),
-        ]);
+        let pairs = BracketSet::new(vec![BracketPair::new("'", "'")
+            .with_kind(BracketKind::Quote)
+            .with_contexts(ContextMask::CODE | ContextMask::STRING)]);
         // We're in a STRING context
         let contexts = vec![BracketContext::String];
 
@@ -1903,7 +1906,7 @@ mod tests {
         let doc = Rope::from("test\n");
         let selection = Selection::single(4, 5);
         let pairs = BracketSet::new(vec![
-            BracketPair::new("(", ")").with_contexts(ContextMask::CODE),
+            BracketPair::new("(", ")").with_contexts(ContextMask::CODE)
         ]);
 
         // No contexts provided - should default to CODE
@@ -1923,12 +1926,9 @@ mod tests {
         // Positions: c(0) o(1) d(2) e(3) " "(4) \"(5) s(6) t(7) r(8) \"(9) ...
         let doc = Rope::from("code \"str\" code\n");
         // Two cursors: one in code (pos 4 = space), one in string (pos 7 = 't')
-        let selection = Selection::new(
-            smallvec::smallvec![Range::new(4, 5), Range::new(7, 8)],
-            0,
-        );
+        let selection = Selection::new(smallvec::smallvec![Range::new(4, 5), Range::new(7, 8)], 0);
         let pairs = BracketSet::new(vec![
-            BracketPair::new("(", ")").with_contexts(ContextMask::CODE),
+            BracketPair::new("(", ")").with_contexts(ContextMask::CODE)
         ]);
         // First cursor in CODE, second in STRING
         let contexts = vec![BracketContext::Code, BracketContext::String];

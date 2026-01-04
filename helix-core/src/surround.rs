@@ -831,10 +831,7 @@ mod test {
     #[test]
     fn test_get_surround_pos_multi_multiple_cursors() {
         let doc = Rope::from("{% a %} {% b %}");
-        let selection = Selection::new(
-            smallvec::smallvec![Range::point(3), Range::point(11)],
-            0,
-        );
+        let selection = Selection::new(smallvec::smallvec![Range::point(3), Range::point(11)], 0);
 
         let result = get_surround_pos_multi(doc.slice(..), &selection, "{%", "%}", 1);
         assert!(result.is_ok());

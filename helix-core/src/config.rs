@@ -48,8 +48,8 @@ pub fn user_lang_config() -> Result<Configuration, toml::de::Error> {
 
 /// Load the auto-pairs registry from auto-pairs.toml.
 pub fn auto_pairs_registry() -> Result<AutoPairsRegistry, LanguageLoaderError> {
-    let config_val = helix_loader::config::auto_pairs_config()
-        .map_err(LanguageLoaderError::DeserializeError)?;
+    let config_val =
+        helix_loader::config::auto_pairs_config().map_err(LanguageLoaderError::DeserializeError)?;
     AutoPairsRegistry::from_toml(&config_val).map_err(LanguageLoaderError::AutoPairsError)
 }
 
