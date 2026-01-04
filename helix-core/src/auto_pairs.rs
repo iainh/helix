@@ -390,36 +390,26 @@ pub fn detect_trigger_at<'a>(
 fn find_prefix_close_to_replace(
     doc: &Rope,
     cursor: usize,
-    typed_char: char,
     matched_pair: &BracketPair,
     set: &BracketSet,
 ) -> Option<usize> {
-    // Only applies to multi-char triggers
-    if matched_pair.trigger.len() <= 1 {
+    if matched_pair.trigger.chars().count() <= 1 {
         return None;
     }
 
-    // Get the prefix (trigger minus the typed char)
-    let prefix: String = matched_pair
-        .trigger
-        .chars()
-        .take(matched_pair.trigger.len() - typed_char.len_utf8())
-        .collect();
+    // Get all trigger chars into a small stack buffer (triggers are short).
+    let mut chars: SmallVec<[char; 8]> = matched_pair.trigger.chars().collect();
+    // Remove the last char (the one we just typed).
+    let _ = chars.pop()?;
+    let prefix_last_char = *chars.last()?;
 
-    if prefix.is_empty() {
-        return None;
-    }
+    // Single-char prefix pair
+    let prefix_pair = set.pairs().iter().find(|p| {
+        p.trigger.chars().count() == 1
+            && p.trigger.chars().next() == Some(prefix_last_char)
+            && !p.same()
+    })?;
 
-    // Check if there's a single-char pair that matches the last char of the prefix
-    let prefix_last_char = prefix.chars().last()?;
-
-    // Look for a single-char pair whose open is the prefix_last_char
-    let prefix_pair = set
-        .pairs()
-        .iter()
-        .find(|p| p.trigger.len() == 1 && p.trigger.starts_with(prefix_last_char) && !p.same())?;
-
-    // Check if the close char of that pair is at the cursor position
     let close_first_char = prefix_pair.close.chars().next()?;
     let char_at_cursor = doc.get_char(cursor)?;
 
@@ -779,7 +769,7 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
                 // Check if a prefix of this trigger was already auto-paired with a
                 // single-char close that we need to replace.
                 let prefix_close_to_remove =
-                    find_prefix_close_to_replace(state.doc, cursor, ch, pair, state.pairs);
+                    find_prefix_close_to_replace(state.doc, cursor, pair, state.pairs);
 
                 let mut pair_str = Tendril::new();
                 pair_str.push(ch);
@@ -929,7 +919,7 @@ pub fn hook_multi(
                 // types "{" and we inserted "{}", then they type "%" to complete "{%",
                 // we need to replace the "}" with "%}".
                 let prefix_close_to_remove =
-                    find_prefix_close_to_replace(doc, cursor, ch, pair, pairs);
+                    find_prefix_close_to_replace(doc, cursor, pair, pairs);
 
                 let mut pair_str = Tendril::new();
                 pair_str.push(ch);
