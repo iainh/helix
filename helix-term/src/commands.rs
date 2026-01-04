@@ -4178,8 +4178,6 @@ pub mod insert {
 
         let loader: &helix_core::syntax::Loader = &cx.editor.syn_loader.load();
 
-        // Try context-aware multi-char auto-pairs (supports ```, {% %}, etc.)
-        // Uses tree-sitter to detect string/comment contexts and gate pairing
         let bracket_set = doc.bracket_set(cx.editor, loader, view);
         let transaction = bracket_set
             .and_then(|bs| {
@@ -4196,10 +4194,7 @@ pub mod insert {
                     Some(ld) => {
                         auto_pairs::hook_with_syntax(text, selection, c, bs, syntax, ld, loader)
                     }
-                    None => {
-                        // Fallback: no language data, use non-context-aware hook
-                        auto_pairs::hook_multi(text, selection, c, bs)
-                    }
+                    None => auto_pairs::hook_multi(text, selection, c, bs),
                 }
             })
             .or_else(|| insert(text, selection, c));
@@ -4505,16 +4500,13 @@ pub mod insert {
                         (start, pos) // delete!
                     }
                 } else if range.is_single_grapheme(text) {
-                    // Try multi-char auto-pairs deletion
                     if let Some(bs) = bracket_set {
                         if let Some(del) = auto_pairs::detect_pair_for_deletion(full_doc, pos, bs) {
                             return (pos - del.delete_before, pos + del.delete_after);
                         }
                     }
-                    // No auto-pair match, delete 1 char
                     (graphemes::nth_prev_grapheme_boundary(text, pos, count), pos)
                 } else {
-                    // delete 1 char
                     (graphemes::nth_prev_grapheme_boundary(text, pos, count), pos)
                 }
             });
@@ -6161,7 +6153,6 @@ static SURROUND_HELP_TEXT: [(&str, &str); 6] = [
 fn surround_add(cx: &mut Context) {
     cx.on_next_key(move |cx, event| {
         cx.editor.autoinfo = None;
-        // Get the surround pair strings before borrowing doc mutably
         let (open, close, surround_len) = match event.char() {
             Some(ch) => {
                 let loader = cx.editor.syn_loader.load();
@@ -6228,13 +6219,11 @@ fn surround_replace(cx: &mut Context) {
             None => return,
         };
 
-        // Try multi-char pairs first if we have a BracketSet
         let loader = cx.editor.syn_loader.load();
         let multi_char_result = surround_ch.and_then(|ch| {
             let (view, doc) = current_ref!(cx.editor);
             let bracket_set = doc.bracket_set(cx.editor, &loader, view)?;
 
-            // Check if this char maps to a multi-char pair
             let pair = bracket_set.surround_pairs().find(|p| {
                 let open_first = p.open.chars().next();
                 let close_first = p.close.chars().next();
@@ -6251,7 +6240,6 @@ fn surround_replace(cx: &mut Context) {
         let text = doc.text().slice(..);
         let selection = doc.selection(view.id);
 
-        // change_pos_with_len: Vec<(pos, len)> for multi-char, or Vec<(pos, 1)> for single-char
         let change_pos_with_len: Vec<(usize, usize)> = if let Some(positions) = multi_char_result {
             positions
         } else {
@@ -6283,7 +6271,6 @@ fn surround_replace(cx: &mut Context) {
                     return doc.set_selection(view.id, selection);
                 }
             };
-            // Get the surround pair strings before borrowing doc mutably
             let loader = cx.editor.syn_loader.load();
             let (open, close) = {
                 let (view, doc) = current_ref!(cx.editor);
@@ -6295,8 +6282,7 @@ fn surround_replace(cx: &mut Context) {
                     })
             };
 
-            // the changeset has to be sorted to allow nested surrounds
-            // Each pair of entries is (open_pos, open_len), (close_pos, close_len)
+            // Sorting allows nested surrounds to be processed correctly
             let mut sorted_pos: Vec<(usize, usize, Tendril)> = Vec::new();
             for p in change_pos_with_len.chunks(2) {
                 sorted_pos.push((p[0].0, p[0].1, Tendril::from(open.as_str())));
@@ -6338,13 +6324,11 @@ fn surround_delete(cx: &mut Context) {
             None => return,
         };
 
-        // Try multi-char pairs first if we have a BracketSet
         let loader = cx.editor.syn_loader.load();
         let multi_char_result = surround_ch.and_then(|ch| {
             let (view, doc) = current_ref!(cx.editor);
             let bracket_set = doc.bracket_set(cx.editor, &loader, view)?;
 
-            // Check if this char maps to a multi-char pair
             let pair = bracket_set.surround_pairs().find(|p| {
                 let open_first = p.open.chars().next();
                 let close_first = p.close.chars().next();
@@ -6362,7 +6346,6 @@ fn surround_delete(cx: &mut Context) {
         let selection = doc.selection(view.id);
 
         if let Some(mut positions) = multi_char_result {
-            // Multi-char deletion: positions are (pos, len) tuples
             positions.sort_unstable_by_key(|(pos, _)| *pos);
             let transaction = Transaction::change(
                 doc.text(),
@@ -6372,7 +6355,6 @@ fn surround_delete(cx: &mut Context) {
             );
             doc.apply(&transaction, view.id);
         } else {
-            // Fall back to single-char deletion
             let mut change_pos =
                 match surround::get_surround_pos(doc.syntax(), text, selection, surround_ch, count)
                 {

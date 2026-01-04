@@ -91,12 +91,6 @@ pub struct LanguageConfiguration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub debugger: Option<DebugAdapterConfig>,
 
-    /// Automatic insertion of pairs to parentheses, brackets,
-    /// etc. Defaults to true. Optionally, this can be a list of 2-tuples
-    /// to specify a list of characters to pair. This overrides the
-    /// global setting.
-    ///
-    /// This also populates `bracket_set()` for multi-character auto-pairs.
     #[serde(
         default,
         skip_serializing,
@@ -105,11 +99,9 @@ pub struct LanguageConfiguration {
     )]
     pub auto_pair_config: Option<AutoPairConfig>,
 
-    /// Legacy auto_pairs accessor - computed from auto_pair_config
     #[serde(skip)]
     pub auto_pairs: Option<AutoPairs>,
 
-    /// Multi-character auto-pairs - computed from auto_pair_config
     #[serde(skip)]
     pub bracket_set: Option<BracketSet>,
 
@@ -526,38 +518,25 @@ pub enum IndentationHeuristic {
     Hybrid,
 }
 
-/// Configuration for auto pairs
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, untagged)]
 pub enum AutoPairConfig {
-    /// Enables or disables auto pairing. False means disabled. True means to use the default pairs.
     Enable(bool),
-
-    /// The mappings of pairs (legacy single-char format).
     Pairs(HashMap<char, char>),
-
-    /// Advanced multi-character pairs configuration.
     Advanced(Vec<BracketPairConfig>),
 }
 
-/// Configuration for a single bracket pair in the advanced format.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct BracketPairConfig {
-    /// Opening string (required)
     pub open: String,
-    /// Closing string (required)
     pub close: String,
-    /// Custom trigger string (defaults to open)
     #[serde(default)]
     pub trigger: Option<String>,
-    /// Pair kind: "bracket", "quote", "delimiter", "tag", "custom"
     #[serde(default)]
     pub kind: Option<String>,
-    /// Contexts where auto-pairing is allowed: ["code", "string", "comment", "regex"]
     #[serde(default)]
     pub allowed_contexts: Option<Vec<String>>,
-    /// Whether this pair participates in surround commands
     #[serde(default)]
     pub surround: Option<bool>,
 }
@@ -571,7 +550,6 @@ impl BracketPairConfig {
             Some("tag") => BracketKind::Tag,
             Some("custom") => BracketKind::Custom,
             _ => {
-                // Auto-detect based on open/close
                 if self.open == self.close {
                     BracketKind::Quote
                 } else if self.open.len() > 1 || self.close.len() > 1 {
@@ -637,11 +615,8 @@ impl From<&AutoPairConfig> for Option<AutoPairs> {
             AutoPairConfig::Enable(false) => None,
             AutoPairConfig::Enable(true) => Some(AutoPairs::default()),
             AutoPairConfig::Pairs(pairs) => Some(AutoPairs::new(pairs.iter())),
-            AutoPairConfig::Advanced(_) => {
-                // For legacy AutoPairs, convert advanced config to single-char pairs only
-                // Full multi-char support uses BracketSet instead
-                Some(AutoPairs::default())
-            }
+            // Legacy AutoPairs only supports single-char pairs; multi-char uses BracketSet
+            AutoPairConfig::Advanced(_) => Some(AutoPairs::default()),
         }
     }
 }

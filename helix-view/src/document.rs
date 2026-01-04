@@ -2187,12 +2187,10 @@ impl Document {
             }
         }
 
+        // Use root layer so template language pairs (e.g. Jinja) work in injection regions
         self.syntax
             .as_ref()
             .and_then(|syntax| {
-                // For auto-pairs, prefer the root layer's config.
-                // This ensures that e.g. Jinja's {%/%} pairs work even when
-                // the cursor is in an HTML injection region.
                 let root_layer = syntax.root_layer();
                 let root_lang_config = loader.language(syntax.layer(root_layer).language).config();
                 root_lang_config.auto_pairs.as_ref()
@@ -2201,8 +2199,6 @@ impl Document {
     }
 
     /// Get the document's bracket set for multi-character auto-pairs.
-    /// Similar to `auto_pairs()` but returns `BracketSet` which supports
-    /// multi-character triggers like ```, {% %}, <!-- -->, etc.
     pub fn bracket_set<'a>(
         &'a self,
         editor: &'a Editor,
@@ -2211,8 +2207,6 @@ impl Document {
     ) -> Option<&'a BracketSet> {
         let global_config = editor.bracket_set.as_ref();
 
-        // NOTE: If the user specifies the global auto pairs config as false, then
-        //       we want to disable it globally regardless of language settings
         #[allow(clippy::question_mark)]
         {
             if global_config.is_none() {
@@ -2220,12 +2214,10 @@ impl Document {
             }
         }
 
+        // Use root layer so template language pairs (e.g. Jinja) work in injection regions
         self.syntax
             .as_ref()
             .and_then(|syntax| {
-                // For auto-pairs, prefer the root layer's bracket_set.
-                // This ensures that e.g. Jinja's {%/%} pairs work even when
-                // the cursor is in an HTML injection region.
                 let root_layer = syntax.root_layer();
                 let root_lang_config = loader.language(syntax.layer(root_layer).language).config();
                 root_lang_config.bracket_set.as_ref()

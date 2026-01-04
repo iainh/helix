@@ -232,12 +232,6 @@ impl LanguageData {
     }
 
     /// Determine the bracket context at a position in the document.
-    ///
-    /// Uses tree-sitter node types to check if the position is inside a string,
-    /// comment, or regex. This works by walking up the tree from the deepest node
-    /// at the position and checking node kind names against common patterns.
-    ///
-    /// Falls back to `BracketContext::Code` if no matching context is found.
     pub fn bracket_context_at(
         &self,
         tree: &Tree,
@@ -249,7 +243,6 @@ impl LanguageData {
 
         let pos_byte = source.char_to_byte(pos_char) as u32;
 
-        // Find the deepest node at this position
         let Some(mut node) = tree
             .root_node()
             .descendant_for_byte_range(pos_byte, pos_byte)
@@ -257,11 +250,10 @@ impl LanguageData {
             return BracketContext::Code;
         };
 
-        // Walk up the tree checking node types
+        // Walk up tree-sitter nodes to detect string/comment/regex context
         loop {
             let kind = node.kind();
 
-            // Check for string-like nodes
             if kind.contains("string")
                 || kind.contains("char")
                 || kind == "interpreted_string_literal"
@@ -270,17 +262,14 @@ impl LanguageData {
                 return BracketContext::String;
             }
 
-            // Check for comment-like nodes
             if kind.contains("comment") {
                 return BracketContext::Comment;
             }
 
-            // Check for regex-like nodes
             if kind == "regex" || kind == "regex_literal" || kind == "regex_pattern" {
                 return BracketContext::Regex;
             }
 
-            // Move to parent, stop if we reach the root
             if let Some(parent) = node.parent() {
                 node = parent;
             } else {
@@ -362,15 +351,13 @@ impl Loader {
             let language = Language(languages.len() as u32);
             config.language = Some(language);
 
-            // Populate auto_pairs and bracket_set from auto_pair_config if explicitly set
+            // Explicit auto-pairs in languages.toml takes precedence over auto-pairs.toml
             if let Some(ref apc) = config.auto_pair_config {
                 config.auto_pairs = apc.into();
                 config.bracket_set = apc.into();
             } else {
-                // Fall back to auto-pairs.toml registry
                 let bracket_set = auto_pairs_registry.get(&config.language_id).clone();
                 config.bracket_set = Some(bracket_set.clone());
-                // Also populate legacy auto_pairs from the bracket_set's single-char pairs
                 config.auto_pairs = Some(crate::auto_pairs::AutoPairs::from(&bracket_set));
             }
 

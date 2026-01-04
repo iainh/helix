@@ -207,18 +207,11 @@ impl From<(&str, &str)> for BracketPair {
 }
 
 /// Fast-lookup container for bracket pairs.
-///
-/// Provides O(1) lookup by first trigger character, with support for
-/// multi-character triggers through longest-match semantics.
 #[derive(Debug, Clone, Default)]
 pub struct BracketSet {
-    /// All configured pairs
     pairs: Vec<BracketPair>,
-    /// Map from first trigger char to indices in `pairs`
     first_char_index: HashMap<char, Vec<usize>>,
-    /// Map from first close char to indices in `pairs` (for skip-over detection)
     close_char_index: HashMap<char, Vec<usize>>,
-    /// Longest trigger length (for sliding window search)
     max_trigger_len: usize,
 }
 
@@ -331,16 +324,12 @@ impl BracketSet {
 }
 
 /// Detect the longest matching trigger at the cursor position.
-///
-/// This looks backward from the cursor to find completed multi-character triggers.
-/// Returns the matching pair if found.
 pub fn detect_trigger_at<'a>(
     doc: &Rope,
     cursor_char: usize,
     last_typed: char,
     set: &'a BracketSet,
 ) -> Option<&'a BracketPair> {
-    // Fast filter by last char of trigger (which is what was just typed)
     let candidates: Vec<_> = set
         .pairs()
         .iter()
@@ -351,32 +340,23 @@ pub fn detect_trigger_at<'a>(
         return None;
     }
 
-    // For single-char triggers, just return the first match
     if candidates.iter().all(|p| p.trigger.len() == 1) {
         return candidates.into_iter().next();
     }
 
-    // Build sliding window of recent chars (up to max_trigger_len)
+    // Build sliding window of recent chars to support multi-char triggers
     let start = cursor_char.saturating_sub(set.max_trigger_len().saturating_sub(1));
     let slice = doc.slice(start..cursor_char);
     let recent: String = slice.chars().chain(std::iter::once(last_typed)).collect();
 
-    // Find longest matching trigger (greedy)
     candidates
         .into_iter()
         .filter(|pair| recent.ends_with(&pair.trigger))
         .max_by_key(|pair| pair.trigger.len())
 }
 
-/// Find if the prefix of a multi-char trigger was already auto-paired with a
-/// single-char close that needs to be replaced.
-///
-/// For example, if we have pairs `{` → `}` and `{%` → `%}`:
-/// - User types `{`, we insert `{}`
-/// - User types `%`, we detect `{%` trigger
-/// - This function finds that `}` at cursor should be replaced
-///
-/// Returns the character position of the close char to remove, if any.
+/// When completing a multi-char trigger like `{%`, check if the prefix `{`
+/// was already auto-paired with `}` that now needs replacement.
 fn find_prefix_close_to_replace(
     doc: &Rope,
     cursor: usize,
@@ -387,13 +367,10 @@ fn find_prefix_close_to_replace(
         return None;
     }
 
-    // Get all trigger chars into a small stack buffer (triggers are short).
     let mut chars: SmallVec<[char; 8]> = matched_pair.trigger.chars().collect();
-    // Remove the last char (the one we just typed).
     let _ = chars.pop()?;
     let prefix_last_char = *chars.last()?;
 
-    // Single-char prefix pair
     let prefix_pair = set.pairs().iter().find(|p| {
         p.trigger.chars().count() == 1
             && p.trigger.chars().next() == Some(prefix_last_char)
@@ -411,30 +388,23 @@ fn find_prefix_close_to_replace(
 }
 
 /// Check if a pair should be active in the given context.
-///
-/// Returns true if the pair's `allowed_contexts` mask intersects with
-/// the mask corresponding to the given context.
 pub fn context_allows_pair(context: BracketContext, pair: &BracketPair) -> bool {
     pair.allowed_contexts.intersects(context.to_mask())
 }
 
 /// Detect if a close sequence matches at the cursor position.
-///
-/// This looks forward from the cursor to see if the close sequence is present.
 pub fn detect_close_at<'a>(
     doc: &Rope,
     cursor_char: usize,
     last_typed: char,
     set: &'a BracketSet,
 ) -> Option<&'a BracketPair> {
-    // Get candidates whose close starts with the typed char
     let candidates: Vec<_> = set.candidates_for_close(last_typed).collect();
 
     if candidates.is_empty() {
         return None;
     }
 
-    // Check which pairs have their close sequence at cursor
     for pair in candidates {
         let close_len = pair.close.chars().count();
         if cursor_char + close_len > doc.len_chars() {
@@ -449,26 +419,13 @@ pub fn detect_close_at<'a>(
     None
 }
 
-/// Result of detecting a bracketed pair around the cursor for deletion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeletePairResult {
-    /// Number of characters to delete before the cursor (the open sequence)
     pub delete_before: usize,
-    /// Number of characters to delete after the cursor (the close sequence)
     pub delete_after: usize,
 }
 
 /// Detect if the cursor is positioned between a matched open/close pair for deletion.
-///
-/// This function checks if the characters immediately before the cursor match
-/// an opening sequence, and the characters immediately after match the corresponding
-/// closing sequence. If so, returns how many characters to delete on each side.
-///
-/// For example, with pairs `{` → `}` and `{%` → `%}`:
-/// - `{|}` returns `DeletePairResult { delete_before: 1, delete_after: 1 }`
-/// - `{%|%}` returns `DeletePairResult { delete_before: 2, delete_after: 2 }`
-///
-/// Returns `None` if the cursor is not between a matched pair.
 pub fn detect_pair_for_deletion(
     doc: &Rope,
     cursor: usize,
@@ -485,23 +442,20 @@ pub fn detect_pair_for_deletion(
         let open_len = pair.open.chars().count();
         let close_len = pair.close.chars().count();
 
-        // Check if there's enough space before cursor for the open sequence
         if cursor < open_len {
             continue;
         }
 
-        // Check if there's enough space after cursor for the close sequence
         if cursor + close_len > doc_len {
             continue;
         }
 
         let open_start = cursor - open_len;
 
-        // Check if both match
         if doc.slice(open_start..cursor) == pair.open
             && doc.slice(cursor..cursor + close_len) == pair.close
         {
-            // Prefer longer matches (e.g., `{%|%}` over `{|}` when both could match)
+            // Prefer longer matches for nested pairs like `{%` inside `{`
             if best_match.as_ref().map_or(true, |m| {
                 open_len + close_len > m.delete_before + m.delete_after
             }) {
@@ -660,19 +614,11 @@ pub fn hook(doc: &Rope, selection: &Selection, ch: char, pairs: &AutoPairs) -> O
 }
 
 /// State passed to the auto-pairs hook for context-aware pairing.
-///
-/// This struct encapsulates all the information needed to determine whether
-/// auto-pairing should occur and what the result should be.
 #[derive(Debug, Clone)]
 pub struct AutoPairState<'a> {
-    /// The document being edited
     pub doc: &'a Rope,
-    /// The current selection
     pub selection: &'a Selection,
-    /// The bracket set to use for pairing
     pub pairs: &'a BracketSet,
-    /// The syntactic context at each cursor position (indexed by selection range)
-    /// If None, context checking is disabled and all pairs are allowed.
     pub contexts: Option<&'a [BracketContext]>,
 }
 
@@ -711,13 +657,6 @@ impl<'a> AutoPairState<'a> {
 }
 
 /// Hook for multi-character auto-pairs with context awareness.
-///
-/// This is the context-aware entry point that supports multi-character pairs like ```,
-/// `{% %}`, `<!-- -->`, etc., and respects syntactic context (code, string, comment).
-///
-/// Returns `Some(Transaction)` when auto-pairing should occur. The transaction
-/// includes BOTH the typed character AND the closing sequence.
-/// Returns `None` when no auto-pair action is needed (caller should insert normally).
 #[must_use]
 pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transaction> {
     log::trace!(
@@ -739,11 +678,8 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
             .unwrap_or(0);
         let context = state.context_for_range(range_idx);
 
-        // Try to detect a completed trigger (the char is about to be typed at cursor)
         if let Some(pair) = detect_trigger_at(state.doc, cursor, ch, state.pairs) {
-            // Check context gating
             if !context_allows_pair(context, pair) {
-                // Context doesn't allow this pair, insert just the typed char
                 let mut t = Tendril::new();
                 t.push(ch);
                 let next_range = get_next_range(state.doc, start_range, offs, 1);
@@ -755,19 +691,15 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
 
             let next_char = state.doc.get_char(cursor);
 
-            // For symmetric pairs (quotes), check if we should skip over existing close
+            // Skip over existing close for symmetric pairs (quotes)
             if pair.same() && next_char == Some(ch) {
-                // Skip over the close - no change needed, just move cursor
                 let next_range = get_next_range(state.doc, start_range, offs, 0);
                 end_ranges.push(next_range);
                 made_changes = true;
                 return (cursor, cursor, None);
             }
 
-            // Check if we should insert the pair
             if pair.should_close(state.doc, start_range) {
-                // Check if a prefix of this trigger was already auto-paired with a
-                // single-char close that we need to replace.
                 let prefix_close_to_remove =
                     find_prefix_close_to_replace(state.doc, cursor, pair, state.pairs);
 
@@ -777,10 +709,8 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
 
                 let len_inserted = pair_str.chars().count();
 
-                // Calculate range changes accounting for removed close char
                 let (delete_start, delete_end) =
                     if let Some(close_char_pos) = prefix_close_to_remove {
-                        // Delete from cursor to after the old close char
                         (cursor, close_char_pos + 1)
                     } else {
                         (cursor, cursor)
@@ -795,7 +725,6 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
                 made_changes = true;
                 return (delete_start, delete_end, Some(pair_str));
             } else {
-                // Conditions not met for auto-close, insert just the typed char
                 let mut t = Tendril::new();
                 t.push(ch);
                 let next_range = get_next_range(state.doc, start_range, offs, 1);
@@ -806,10 +735,8 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
             }
         }
 
-        // Check if we're typing a close character and should skip over it
         if let Some(pair) = detect_close_at(state.doc, cursor, ch, state.pairs) {
             if !pair.same() {
-                // Non-symmetric pair: skip over the close
                 let next_range = get_next_range(state.doc, start_range, offs, 0);
                 end_ranges.push(next_range);
                 made_changes = true;
@@ -817,7 +744,6 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
             }
         }
 
-        // No auto-pair action, return no-op (caller will insert normally)
         let next_range = get_next_range(state.doc, start_range, offs, 0);
         end_ranges.push(next_range);
         (cursor, cursor, None)
@@ -833,22 +759,6 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
 }
 
 /// Hook for multi-character auto-pairs with automatic context detection from syntax tree.
-///
-/// This is the highest-level entry point for context-aware auto-pairing. It automatically
-/// computes the syntactic context (code, string, comment, regex) for each cursor position
-/// using the provided syntax tree and language data.
-///
-/// # Arguments
-/// * `doc` - The document text
-/// * `selection` - Current selection with one or more cursors
-/// * `ch` - The character being typed
-/// * `pairs` - The bracket set to use for auto-pairing
-/// * `syntax` - Optional syntax tree (if None, falls back to CODE context)
-/// * `lang_data` - Language data containing `bracket_context_at` method
-/// * `loader` - Syntax loader for language configuration
-///
-/// # Returns
-/// `Some(Transaction)` when auto-pairing should occur, `None` otherwise.
 #[must_use]
 pub fn hook_with_syntax(
     doc: &Rope,
@@ -879,14 +789,7 @@ pub fn hook_with_syntax(
     hook_with_context(&state, ch)
 }
 
-/// Hook for multi-character auto-pairs.
-///
-/// This is the new entry point that supports multi-character pairs like ```,
-/// `{% %}`, `<!-- -->`, etc.
-///
-/// Returns `Some(Transaction)` when auto-pairing should occur. The transaction
-/// includes BOTH the typed character AND the closing sequence.
-/// Returns `None` when no auto-pair action is needed (caller should insert normally).
+/// Hook for multi-character auto-pairs without context awareness.
 #[must_use]
 pub fn hook_multi(
     doc: &Rope,
@@ -903,25 +806,18 @@ pub fn hook_multi(
     let transaction = Transaction::change_by_selection(doc, selection, |start_range| {
         let cursor = start_range.cursor(doc.slice(..));
 
-        // Try to detect a completed trigger (the char is about to be typed at cursor)
         if let Some(pair) = detect_trigger_at(doc, cursor, ch, pairs) {
             let next_char = doc.get_char(cursor);
 
-            // For symmetric pairs (quotes), check if we should skip over existing close
+            // Skip over existing close for symmetric pairs (quotes)
             if pair.same() && next_char == Some(ch) {
-                // Skip over the close - no change needed, just move cursor
                 let next_range = get_next_range(doc, start_range, offs, 0);
                 end_ranges.push(next_range);
                 made_changes = true;
                 return (cursor, cursor, None);
             }
 
-            // Check if we should insert the pair
             if pair.should_close(doc, start_range) {
-                // Check if a prefix of this trigger was already auto-paired with a
-                // single-char close that we need to replace. For example, if the user
-                // types "{" and we inserted "{}", then they type "%" to complete "{%",
-                // we need to replace the "}" with "%}".
                 let prefix_close_to_remove = find_prefix_close_to_replace(doc, cursor, pair, pairs);
 
                 let mut pair_str = Tendril::new();
@@ -930,10 +826,8 @@ pub fn hook_multi(
 
                 let len_inserted = pair_str.chars().count();
 
-                // Calculate range changes accounting for removed close char
                 let (delete_start, delete_end) =
                     if let Some(close_char_pos) = prefix_close_to_remove {
-                        // Delete from cursor to after the old close char
                         (cursor, close_char_pos + 1)
                     } else {
                         (cursor, cursor)
@@ -948,7 +842,6 @@ pub fn hook_multi(
                 made_changes = true;
                 return (delete_start, delete_end, Some(pair_str));
             } else {
-                // Conditions not met for auto-close, insert just the typed char
                 let mut t = Tendril::new();
                 t.push(ch);
                 let next_range = get_next_range(doc, start_range, offs, 1);
@@ -959,10 +852,8 @@ pub fn hook_multi(
             }
         }
 
-        // Check if we're typing a close character and should skip over it
         if let Some(pair) = detect_close_at(doc, cursor, ch, pairs) {
             if !pair.same() {
-                // Non-symmetric pair: skip over the close
                 let next_range = get_next_range(doc, start_range, offs, 0);
                 end_ranges.push(next_range);
                 made_changes = true;
@@ -970,7 +861,6 @@ pub fn hook_multi(
             }
         }
 
-        // No auto-pair action, return no-op (caller will insert normally)
         let next_range = get_next_range(doc, start_range, offs, 0);
         end_ranges.push(next_range);
         (cursor, cursor, None)
