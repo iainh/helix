@@ -451,10 +451,7 @@ pub fn detect_close_at<'a>(
             continue;
         }
 
-        let slice = doc.slice(cursor_char..cursor_char + close_len);
-        let at_cursor: String = slice.chars().collect();
-
-        if at_cursor == pair.close {
+        if doc.slice(cursor_char..cursor_char + close_len) == pair.close {
             return Some(pair);
         }
     }
@@ -504,19 +501,16 @@ pub fn detect_pair_for_deletion(doc: &Rope, cursor: usize, set: &BracketSet) -> 
             continue;
         }
 
-        // Extract the text before cursor (potential open sequence)
         let open_start = cursor - open_len;
-        let before_slice = doc.slice(open_start..cursor);
-        let before_text: String = before_slice.chars().collect();
-
-        // Extract the text after cursor (potential close sequence)
-        let after_slice = doc.slice(cursor..cursor + close_len);
-        let after_text: String = after_slice.chars().collect();
 
         // Check if both match
-        if before_text == pair.open && after_text == pair.close {
+        if doc.slice(open_start..cursor) == pair.open
+            && doc.slice(cursor..cursor + close_len) == pair.close
+        {
             // Prefer longer matches (e.g., `{%|%}` over `{|}` when both could match)
-            if best_match.as_ref().map_or(true, |m| open_len + close_len > m.delete_before + m.delete_after) {
+            if best_match.as_ref().map_or(true, |m| {
+                open_len + close_len > m.delete_before + m.delete_after
+            }) {
                 best_match = Some(DeletePairResult {
                     delete_before: open_len,
                     delete_after: close_len,

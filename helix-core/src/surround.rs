@@ -332,9 +332,9 @@ fn find_nth_prev_str(text: RopeSlice, pattern: &str, pos: usize, n: usize) -> Op
 
     loop {
         // Check if pattern matches at search_pos
-        let slice_end = (search_pos + pattern_len).min(text.len_chars());
-        let slice: String = text.slice(search_pos..slice_end).chars().collect();
-        if slice == pattern {
+        if search_pos + pattern_len <= text.len_chars()
+            && text.slice(search_pos..search_pos + pattern_len) == pattern
+        {
             found += 1;
             if found == n {
                 return Some(search_pos);
@@ -361,8 +361,7 @@ fn find_nth_next_str(text: RopeSlice, pattern: &str, pos: usize, n: usize) -> Op
     let mut search_pos = pos;
 
     while search_pos + pattern_len <= text.len_chars() {
-        let slice: String = text.slice(search_pos..search_pos + pattern_len).chars().collect();
-        if slice == pattern {
+        if text.slice(search_pos..search_pos + pattern_len) == pattern {
             found += 1;
             if found == n {
                 return Some(search_pos);
@@ -393,11 +392,7 @@ fn find_nth_open_pair_multi(
     for offset in 0..open_len {
         let start = pos.saturating_sub(offset);
         if start + open_len <= text.len_chars() {
-            let slice: String = text
-                .slice(start..start + open_len)
-                .chars()
-                .collect();
-            if slice == open {
+            if text.slice(start..start + open_len) == open {
                 return Some(start);
             }
         }
@@ -408,11 +403,7 @@ fn find_nth_open_pair_multi(
     for offset in 0..close_len {
         let start = pos.saturating_sub(offset);
         if start + close_len <= text.len_chars() {
-            let slice: String = text
-                .slice(start..start + close_len)
-                .chars()
-                .collect();
-            if slice == close {
+            if text.slice(start..start + close_len) == close {
                 // We're on the close pattern, start search before it
                 search_pos = start;
                 break;
@@ -425,11 +416,7 @@ fn find_nth_open_pair_multi(
 
         // Check for close pattern (increases nesting)
         if search_pos + close_len <= text.len_chars() {
-            let slice: String = text
-                .slice(search_pos..search_pos + close_len)
-                .chars()
-                .collect();
-            if slice == close {
+            if text.slice(search_pos..search_pos + close_len) == close {
                 step_over += 1;
                 continue;
             }
@@ -437,11 +424,7 @@ fn find_nth_open_pair_multi(
 
         // Check for open pattern
         if search_pos + open_len <= text.len_chars() {
-            let slice: String = text
-                .slice(search_pos..search_pos + open_len)
-                .chars()
-                .collect();
-            if slice == open {
+            if text.slice(search_pos..search_pos + open_len) == open {
                 if step_over == 0 {
                     found += 1;
                     if found == n {
@@ -477,11 +460,7 @@ fn find_nth_close_pair_multi(
     for offset in 0..close_len {
         let start = pos.saturating_sub(offset);
         if start + close_len <= text.len_chars() {
-            let slice: String = text
-                .slice(start..start + close_len)
-                .chars()
-                .collect();
-            if slice == close {
+            if text.slice(start..start + close_len) == close {
                 return Some(start);
             }
         }
@@ -492,11 +471,7 @@ fn find_nth_close_pair_multi(
 
         // Check for open pattern (increases nesting)
         if search_pos + open_len <= text.len_chars() {
-            let slice: String = text
-                .slice(search_pos..search_pos + open_len)
-                .chars()
-                .collect();
-            if slice == open {
+            if text.slice(search_pos..search_pos + open_len) == open {
                 step_over += 1;
                 continue;
             }
@@ -504,11 +479,7 @@ fn find_nth_close_pair_multi(
 
         // Check for close pattern
         if search_pos + close_len <= text.len_chars() {
-            let slice: String = text
-                .slice(search_pos..search_pos + close_len)
-                .chars()
-                .collect();
-            if slice == close {
+            if text.slice(search_pos..search_pos + close_len) == close {
                 if step_over == 0 {
                     found += 1;
                     if found == n {
