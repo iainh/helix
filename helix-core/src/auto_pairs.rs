@@ -802,11 +802,11 @@ pub fn hook_with_context(state: &AutoPairState<'_>, ch: char) -> Option<Transact
                     };
 
                 let chars_removed = delete_end - delete_start;
+                let net_inserted = len_inserted.saturating_sub(chars_removed);
 
-                // Cursor advances by 1 (the char completing the opener), not the full insertion
-                let next_range = get_next_range(state.doc, start_range, offs, 1);
+                let next_range = get_next_range(state.doc, start_range, offs, net_inserted);
                 end_ranges.push(next_range);
-                offs = offs + len_inserted - chars_removed;
+                offs = offs + net_inserted;
                 made_changes = true;
                 return (delete_start, delete_end, Some(pair_str));
             } else {
@@ -944,11 +944,11 @@ pub fn hook_multi(
                     };
 
                 let chars_removed = delete_end - delete_start;
+                let net_inserted = len_inserted.saturating_sub(chars_removed);
 
-                // Cursor advances by 1 (the char completing the opener), not the full insertion
-                let next_range = get_next_range(doc, start_range, offs, 1);
+                let next_range = get_next_range(doc, start_range, offs, net_inserted);
                 end_ranges.push(next_range);
-                offs = offs + len_inserted - chars_removed;
+                offs = offs + net_inserted;
                 made_changes = true;
                 return (delete_start, delete_end, Some(pair_str));
             } else {
