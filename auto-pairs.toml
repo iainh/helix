@@ -280,10 +280,10 @@ pairs = [
   { open = "(", close = ")" },
   { open = "{", close = "}" },
   { open = "[", close = "]" },
-  { open = "\"", close = "\"", kind = "quote" },
-  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
-  { open = "'", close = "'", kind = "quote" },
-  { open = "'''", close = "'''", kind = "quote" },
+  { open = "\"", close = "\"", kind = "quote", allowed-contexts = ["code", "string"] },
+  { open = "\"\"\"", close = "\"\"\"", kind = "quote", allowed-contexts = ["code", "string"] },
+  { open = "'", close = "'", kind = "quote", allowed-contexts = ["code", "string"] },
+  { open = "'''", close = "'''", kind = "quote", allowed-contexts = ["code", "string"] },
 ]
 
 [ruby]
@@ -442,8 +442,8 @@ pairs = [
   { open = "(", close = ")" },
   { open = "{", close = "}" },
   { open = "[", close = "]" },
-  { open = "\"", close = "\"", kind = "quote" },
-  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
+  { open = "\"", close = "\"", kind = "quote", allowed-contexts = ["code", "string"] },
+  { open = "\"\"\"", close = "\"\"\"", kind = "quote", allowed-contexts = ["code", "string"] },
   { open = "'", close = "'", kind = "quote" },
   { open = "<", close = ">" },
 ]
@@ -454,7 +454,6 @@ pairs = [
   { open = "{", close = "}" },
   { open = "[", close = "]" },
   { open = "\"", close = "\"", kind = "quote" },
-  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
   { open = "'", close = "'", kind = "quote" },
   { open = "<", close = ">" },
   { open = "${", close = "}", kind = "delimiter" },
@@ -466,7 +465,6 @@ pairs = [
   { open = "{", close = "}" },
   { open = "[", close = "]" },
   { open = "\"", close = "\"", kind = "quote" },
-  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
   { open = "'", close = "'", kind = "quote" },
 ]
 
@@ -476,9 +474,7 @@ pairs = [
   { open = "{", close = "}" },
   { open = "[", close = "]" },
   { open = "\"", close = "\"", kind = "quote" },
-  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
   { open = "'", close = "'", kind = "quote" },
-  { open = "'''", close = "'''", kind = "quote" },
   { open = "${", close = "}", kind = "delimiter" },
 ]
 
@@ -581,7 +577,7 @@ pairs = [
   { open = "*", close = "*", kind = "delimiter" },
   { open = "_", close = "_", kind = "delimiter" },
   { open = "~~", close = "~~", kind = "delimiter" },
-  { open = "```", close = "```", kind = "delimiter" },
+
 ]
 
 [latex]
@@ -636,7 +632,7 @@ pairs = [
   { open = "{", close = "}" },
   { open = "[", close = "]" },
   { open = "\"", close = "\"", kind = "quote" },
-  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
+
   { open = "'", close = "'", kind = "quote" },
   { open = "<", close = ">" },
   { open = "\\(", close = ")", kind = "delimiter" },
@@ -669,7 +665,7 @@ pairs = [
   { open = "{", close = "}" },
   { open = "[", close = "]" },
   { open = "\"", close = "\"", kind = "quote" },
-  { open = "\"\"\"", close = "\"\"\"", kind = "quote" },
+
   { open = "'", close = "'", kind = "quote" },
   { open = "$(", close = ")", kind = "delimiter" },
 ]

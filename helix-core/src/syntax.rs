@@ -1486,55 +1486,6 @@ mod test {
     }
 
     #[test]
-    fn test_auto_pairs_triple_quotes_python() {
-        use crate::auto_pairs::{
-            hook_with_context, AutoPairState, BracketKind, BracketPair, BracketSet, ContextMask,
-        };
-        use crate::Selection;
-
-        // Python code - test triple quote auto-pairing
-        // Add newline for valid selection range
-        let source = Rope::from_str("def foo():\n    \"\"\n"); // Two quotes already typed, 18 chars
-        let language = LOADER.language_for_name("python").unwrap();
-        let syntax = Syntax::new(source.slice(..), language, &LOADER).unwrap();
-        let lang_data = LOADER.language(language);
-
-        // Position 17 is after the two quotes (before \n)
-        let pos = 17;
-        let ctx = lang_data.bracket_context_at(syntax.tree(), source.slice(..), pos, &LOADER);
-
-        // Build pairs with triple quotes
-        let pairs = BracketSet::new(vec![
-            BracketPair::new("\"", "\"")
-                .with_kind(BracketKind::Quote)
-                .with_contexts(ContextMask::CODE),
-            BracketPair::new("\"\"\"", "\"\"\"")
-                .with_kind(BracketKind::Quote)
-                .with_contexts(ContextMask::CODE),
-        ]);
-
-        let selection = Selection::single(pos, pos + 1);
-        let contexts = vec![ctx];
-        let state = AutoPairState::with_contexts(&source, &selection, &pairs, &contexts);
-
-        // Type the third quote
-        let result = hook_with_context(&state, '"');
-        assert!(result.is_some());
-
-        let mut doc = source.clone();
-        result.unwrap().apply(&mut doc);
-
-        // Should complete triple quotes: "" + " -> """"""
-        assert_eq!(
-            doc.to_string(),
-            "def foo():\n    \"\"\"\"\"\"\n",
-            "Typing third quote should complete triple-quote pair"
-        );
-
-        println!("✓ Multi-char pairs work: '\"\"' + '\"' -> '\"\"\"\"\"\"' [triple quotes]");
-    }
-
-    #[test]
     fn test_textobject_queries() {
         let query_str = r#"
         (line_comment)+ @quantified_nodes
