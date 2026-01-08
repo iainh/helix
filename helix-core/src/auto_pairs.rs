@@ -767,11 +767,8 @@ fn hook_core(state: &AutoPairState<'_>, ch: char, use_context: bool) -> Option<T
             // auto-inserted closer that we should step over rather than insert into.
             if pair.same() && next_char == Some(ch) {
                 let close_len = pair.close.chars().count();
-                let full_close_ahead = if cursor + close_len <= state.doc.len_chars() {
-                    state.doc.slice(cursor..cursor + close_len) == pair.close
-                } else {
-                    false
-                };
+                let full_close_ahead = cursor + close_len <= state.doc.len_chars()
+                    && state.doc.slice(cursor..cursor + close_len) == pair.close;
 
                 if full_close_ahead {
                     let next_range = get_next_range(state.doc, start_range, offs, 0);
