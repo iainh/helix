@@ -913,17 +913,14 @@ pub fn hook_with_syntax(
 ) -> Option<Transaction> {
     log::trace!("autopairs hook_with_syntax selection: {:#?}", selection);
 
-    let contexts: Vec<BracketContext> = selection
+    let contexts: SmallVec<[BracketContext; 4]> = selection
         .ranges()
         .iter()
         .map(|range| {
             let cursor = range.cursor(doc.slice(..));
-            match syntax {
-                Some(syn) => {
-                    lang_data.bracket_context_at(syn.tree(), doc.slice(..), cursor, loader)
-                }
-                None => BracketContext::Code,
-            }
+            syntax
+                .map(|syn| lang_data.bracket_context_at(syn.tree(), doc.slice(..), cursor, loader))
+                .unwrap_or(BracketContext::Code)
         })
         .collect();
 
