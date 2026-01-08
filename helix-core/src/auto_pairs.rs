@@ -154,25 +154,18 @@ impl BracketPair {
 
     /// Check if this pair should auto-close at the given position.
     pub fn should_close(&self, doc: &Rope, range: &Range) -> bool {
-        let mut should_close = Self::next_is_not_alpha(doc, range);
-
-        if self.same() {
-            should_close &= Self::prev_is_not_alpha(doc, range);
-        }
-
-        should_close
+        Self::next_is_not_alpha(doc, range)
+            && (!self.same() || Self::prev_is_not_alpha(doc, range))
     }
 
     fn next_is_not_alpha(doc: &Rope, range: &Range) -> bool {
         let cursor = range.cursor(doc.slice(..));
-        let next_char = doc.get_char(cursor);
-        next_char.map(|c| !c.is_alphanumeric()).unwrap_or(true)
+        doc.get_char(cursor).map_or(true, |c| !c.is_alphanumeric())
     }
 
     fn prev_is_not_alpha(doc: &Rope, range: &Range) -> bool {
         let cursor = range.cursor(doc.slice(..));
-        let prev_char = prev_char(doc, cursor);
-        prev_char.map(|c| !c.is_alphanumeric()).unwrap_or(true)
+        prev_char(doc, cursor).map_or(true, |c| !c.is_alphanumeric())
     }
 }
 
