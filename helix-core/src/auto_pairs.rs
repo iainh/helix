@@ -793,16 +793,7 @@ fn hook_core(state: &AutoPairState<'_>, ch: char, use_context: bool) -> Option<T
                             let prefix_start = cursor - prefix_len;
                             let prefix = state.doc.slice(prefix_start..cursor);
 
-                            // Check that the prefix matches what we expect (all same char)
-                            let mut all_same = true;
-                            for c in prefix.chars() {
-                                if c != ch {
-                                    all_same = false;
-                                    break;
-                                }
-                            }
-
-                            if all_same {
+                            if prefix.chars().all(|c| c == ch) {
                                 log::trace!(
                                     "autopairs: UPGRADE path - prefix '{}' at {}..{}, inserting '{}{}'",
                                     prefix,
