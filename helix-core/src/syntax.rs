@@ -247,7 +247,7 @@ impl LanguageData {
             .root_node()
             .descendant_for_byte_range(pos_byte, pos_byte)
         else {
-            return BracketContext::Code;
+            return BracketContext::Unknown;
         };
 
         // Walk up tree-sitter nodes to detect string/comment/regex context
