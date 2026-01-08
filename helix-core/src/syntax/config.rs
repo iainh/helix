@@ -588,18 +588,16 @@ impl BracketPairConfig {
 
 impl From<BracketPairConfig> for BracketPair {
     fn from(config: BracketPairConfig) -> Self {
-        let trigger = config
-            .trigger
-            .clone()
-            .unwrap_or_else(|| config.open.clone());
-        BracketPair {
-            trigger,
-            open: config.open.clone(),
-            close: config.close.clone(),
-            kind: config.parse_kind(),
-            allowed_contexts: config.parse_contexts(),
-            surround: config.surround.unwrap_or(true),
+        let mut pair = BracketPair::new(config.open.clone(), config.close.clone())
+            .with_kind(config.parse_kind())
+            .with_contexts(config.parse_contexts())
+            .with_surround(config.surround.unwrap_or(true));
+
+        if let Some(trigger) = config.trigger {
+            pair = pair.with_trigger(trigger);
         }
+
+        pair
     }
 }
 

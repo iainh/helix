@@ -96,20 +96,33 @@ pub struct BracketPair {
     pub allowed_contexts: ContextMask,
     /// Whether this pair participates in surround commands
     pub surround: bool,
+    /// Cached char length of trigger
+    trigger_len: usize,
+    /// Cached char length of open
+    open_len: usize,
+    /// Cached char length of close
+    close_len: usize,
 }
 
 impl BracketPair {
     /// Create a new bracket pair with default settings.
     pub fn new(open: impl Into<String>, close: impl Into<String>) -> Self {
         let open = open.into();
+        let close = close.into();
         let trigger = open.clone();
+        let trigger_len = trigger.chars().count();
+        let open_len = open.chars().count();
+        let close_len = close.chars().count();
         Self {
             trigger,
             open,
-            close: close.into(),
+            close,
             kind: BracketKind::Bracket,
             allowed_contexts: ContextMask::CODE,
             surround: true,
+            trigger_len,
+            open_len,
+            close_len,
         }
     }
 
@@ -134,6 +147,7 @@ impl BracketPair {
     /// Set a custom trigger (different from open).
     pub fn with_trigger(mut self, trigger: impl Into<String>) -> Self {
         self.trigger = trigger.into();
+        self.trigger_len = self.trigger.chars().count();
         self
     }
 
@@ -150,6 +164,21 @@ impl BracketPair {
     /// Returns the first character of the close string.
     pub fn close_first_char(&self) -> Option<char> {
         self.close.chars().next()
+    }
+
+    /// Returns the cached char length of the trigger.
+    pub fn trigger_len(&self) -> usize {
+        self.trigger_len
+    }
+
+    /// Returns the cached char length of the open string.
+    pub fn open_len(&self) -> usize {
+        self.open_len
+    }
+
+    /// Returns the cached char length of the close string.
+    pub fn close_len(&self) -> usize {
+        self.close_len
     }
 
     /// Check if this pair should auto-close at the given position.
@@ -363,8 +392,8 @@ pub fn detect_trigger_at<'a>(
     // Find the longest multi-char symmetric trigger for this char
     let max_symmetric_trigger_len = candidates
         .iter()
-        .filter(|p| p.same() && p.trigger.chars().count() > 1)
-        .map(|p| p.trigger.chars().count())
+        .filter(|p| p.same() && p.trigger_len() > 1)
+        .map(|p| p.trigger_len())
         .max()
         .unwrap_or(0);
 
@@ -372,7 +401,7 @@ pub fn detect_trigger_at<'a>(
         if !pair.same() {
             return true;
         }
-        let trigger_len = pair.trigger.chars().count();
+        let trigger_len = pair.trigger_len();
 
         // If next char is the same as what we typed, filter out multi-char
         // symmetric pairs - let single-char pair handle skip logic.
@@ -427,7 +456,7 @@ fn find_prefix_close_to_replace(
     matched_pair: &BracketPair,
     set: &BracketSet,
 ) -> Option<usize> {
-    let trigger_len = matched_pair.trigger.chars().count();
+    let trigger_len = matched_pair.trigger_len();
     if trigger_len <= 1 {
         return None;
     }
@@ -438,8 +467,7 @@ fn find_prefix_close_to_replace(
 
     // Find a prefix pair that could have been auto-paired before this longer trigger
     let prefix_pair = set.pairs().iter().find(|p| {
-        let p_trigger_len = p.trigger.chars().count();
-        p_trigger_len < trigger_len && p.trigger.starts_with(prefix_last_char)
+        p.trigger_len() < trigger_len && p.trigger.starts_with(prefix_last_char)
     })?;
 
     let close_first_char = prefix_pair.close.chars().next()?;
@@ -475,7 +503,7 @@ pub fn detect_close_at<'a>(
     let mut best_len: usize = 0;
 
     for pair in candidates {
-        let close_len = pair.close.chars().count();
+        let close_len = pair.close_len();
         if cursor_char + close_len > doc.len_chars() {
             continue;
         }
@@ -512,8 +540,8 @@ pub fn detect_pair_for_deletion(
     let mut best_match: Option<DeletePairResult> = None;
 
     for pair in set.pairs() {
-        let open_len = pair.open.chars().count();
-        let close_len = pair.close.chars().count();
+        let open_len = pair.open_len();
+        let close_len = pair.close_len();
 
         if cursor < open_len {
             continue;
@@ -766,7 +794,7 @@ fn hook_core(state: &AutoPairState<'_>, ch: char, use_context: bool) -> Option<T
             // We skip when the full close sequence is ahead - this indicates an
             // auto-inserted closer that we should step over rather than insert into.
             if pair.same() && next_char == Some(ch) {
-                let close_len = pair.close.chars().count();
+                let close_len = pair.close_len();
                 let full_close_ahead = cursor + close_len <= state.doc.len_chars()
                     && state.doc.slice(cursor..cursor + close_len) == pair.close;
 
@@ -783,7 +811,7 @@ fn hook_core(state: &AutoPairState<'_>, ch: char, use_context: bool) -> Option<T
                 // When completing a multi-char symmetric trigger like """, we need to
                 // replace the prefix (the already-typed quotes) with the full open+close.
                 if pair.same() {
-                    let trigger_len = pair.trigger.chars().count();
+                    let trigger_len = pair.trigger_len();
                     if trigger_len > 1 {
                         let prefix_len = trigger_len - 1;
                         if cursor >= prefix_len {
@@ -809,8 +837,8 @@ fn hook_core(state: &AutoPairState<'_>, ch: char, use_context: bool) -> Option<T
                                 let delete_start = prefix_start;
                                 let delete_end = cursor;
 
-                                let open_len = pair.open.chars().count();
-                                let close_len = pair.close.chars().count();
+                                let open_len = pair.open_len();
+                                let close_len = pair.close_len();
                                 let chars_removed = delete_end - delete_start;
                                 let net_change =
                                     (open_len + close_len) as isize - chars_removed as isize;
