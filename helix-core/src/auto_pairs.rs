@@ -769,7 +769,9 @@ fn hook_core(state: &AutoPairState<'_>, ch: char, use_context: bool) -> Option<T
 
             let next_char = state.doc.get_char(cursor);
 
-            // For symmetric pairs, check if we should skip over existing close
+            // For symmetric pairs, check if we should skip over existing close.
+            // We skip when the full close sequence is ahead - this indicates an
+            // auto-inserted closer that we should step over rather than insert into.
             if pair.same() && next_char == Some(ch) {
                 let close_len = pair.close.chars().count();
                 let full_close_ahead = if cursor + close_len <= state.doc.len_chars() {
@@ -778,11 +780,7 @@ fn hook_core(state: &AutoPairState<'_>, ch: char, use_context: bool) -> Option<T
                     false
                 };
 
-                let has_potential_open = (0..cursor).any(|i| state.doc.get_char(i) == Some(ch));
-
-                let should_skip = full_close_ahead && has_potential_open;
-
-                if should_skip {
+                if full_close_ahead {
                     let next_range = get_next_range(state.doc, start_range, offs, 0);
                     end_ranges.push(next_range);
                     made_changes = true;
