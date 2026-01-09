@@ -1438,10 +1438,6 @@ mod test {
             "let s = \"hello( \"; \n",
             "In STRING context: typing '(' should insert only '(' (no closing paren)"
         );
-
-        println!("✓ Context detection works:");
-        println!("  - Position 18 (code):   '(' -> '()'  [auto-paired]");
-        println!("  - Position 14 (string): '(' -> '('   [single char only]");
     }
 
     #[test]
@@ -1481,8 +1477,6 @@ mod test {
             "// co(mment here\nlet x = 1;",
             "In COMMENT context: typing '(' should insert only '('"
         );
-
-        println!("✓ Comment context detection works: '(' -> '(' [no auto-pair]");
     }
 
     #[test]
