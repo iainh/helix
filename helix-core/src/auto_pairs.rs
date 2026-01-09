@@ -1645,16 +1645,7 @@ mod tests {
         let mut new_doc = doc.clone();
         assert!(transaction.apply(&mut new_doc));
 
-        // The } should be replaced with %%}
-        // Result: "test{" + "%" + "%}" + "\n" = "test{%%}\n"
-        // Wait, that's wrong. Let me reconsider.
-        //
-        // Original: "test{}\n" with cursor at position 5 (between { and })
-        // We type "%"
-        // The transaction should:
-        // - Delete from cursor (5) to after "}" (6)
-        // - Insert "%%}" at position 5
-        // Result: "test{%%}\n"
+        // "{}" with cursor at 5 (between { and }) → type "%" → "{%%}"
         assert_eq!(new_doc.to_string(), "test{%%}\n");
     }
 
